@@ -4,6 +4,8 @@ Control and monitor your Centurion **SMART Wi-Fi gate operator** (e.g. **D5 Evo 
 
 > **Status: beta.** This is an unofficial, community-built integration and is not affiliated with or endorsed by Centurion Systems. It talks to the same cloud service the official CenSys app uses. Use at your own risk; feedback is very welcome (see [Giving feedback](#giving-feedback)).
 
+![The gate operator in Home Assistant, showing controls, sensors and diagnostics](images/device-dashboard.png)
+
 ---
 
 ## Features
@@ -49,6 +51,8 @@ This repository **is** the integration, so its files go straight into a `centsys
 ---
 
 ## Setup
+
+![Adding the integration and entering your mobile number](images/setup-flow.png)
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for **CenSys Gate Remote**.
