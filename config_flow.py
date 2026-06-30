@@ -14,9 +14,12 @@ from .const import (
     CONF_EMAIL,
     CONF_MOBILE_NUMBER,
     CONF_NAME,
+    CONF_OTP_PLATFORM,
     CONF_TOKEN,
     DEFAULT_OTP_PLATFORM,
     DOMAIN,
+    OTP_PLATFORM_SMS,
+    OTP_PLATFORM_WHATSAPP,
 )
 
 USER_SCHEMA = vol.Schema(
@@ -24,6 +27,14 @@ USER_SCHEMA = vol.Schema(
         vol.Required(CONF_MOBILE_NUMBER): str,
         vol.Optional(CONF_NAME): str,
         vol.Optional(CONF_EMAIL): str,
+        vol.Required(
+            CONF_OTP_PLATFORM, default=str(DEFAULT_OTP_PLATFORM)
+        ): vol.In(
+            {
+                str(OTP_PLATFORM_WHATSAPP): "WhatsApp",
+                str(OTP_PLATFORM_SMS): "SMS",
+            }
+        ),
     }
 )
 
@@ -40,6 +51,7 @@ class CentsysConfigFlow(ConfigFlow, domain=DOMAIN):
         self._number: str | None = None
         self._name: str | None = None
         self._email: str | None = None
+        self._otp_platform: int = DEFAULT_OTP_PLATFORM
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -49,6 +61,9 @@ class CentsysConfigFlow(ConfigFlow, domain=DOMAIN):
             self._number = user_input[CONF_MOBILE_NUMBER].strip()
             self._name = user_input.get(CONF_NAME)
             self._email = user_input.get(CONF_EMAIL)
+            self._otp_platform = int(
+                user_input.get(CONF_OTP_PLATFORM, DEFAULT_OTP_PLATFORM)
+            )
 
             await self.async_set_unique_id(self._number)
             self._abort_if_unique_id_configured()
@@ -56,7 +71,7 @@ class CentsysConfigFlow(ConfigFlow, domain=DOMAIN):
             session = async_get_clientsession(self.hass)
             self._client = CentsysRemoteClient(self._number, session=session)
             try:
-                sent = await self._client.send_otp(otp_platform=DEFAULT_OTP_PLATFORM)
+                sent = await self._client.send_otp(otp_platform=self._otp_platform)
             except CentsysError:
                 errors["base"] = "cannot_connect"
             else:

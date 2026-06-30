@@ -3,11 +3,12 @@
     "step": {
       "user": {
         "title": "CenSys Gate Remote",
-        "description": "Enter the mobile number registered with the MyCentsys Remote app. A one-time PIN will be sent to it.",
+        "description": "Enter the mobile number registered with the MyCentsys Remote app. A one-time PIN will be sent to it via WhatsApp or SMS.",
         "data": {
           "mobile_number": "Mobile number (e.g. +27831234567)",
           "name": "Your name (optional)",
-          "email": "Email (optional)"
+          "email": "Email (optional)",
+          "otp_platform": "Send the one-time PIN via"
         }
       },
       "otp": {

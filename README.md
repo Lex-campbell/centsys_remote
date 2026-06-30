@@ -11,7 +11,7 @@ Control and monitor your Centurion **SMART Wi-Fi gate operator** (e.g. **D5 Evo 
 - **Gate cover** — open / close from the dashboard, automations, voice assistants, etc.
 - **Live status** — the gate animates `opening → open → closing → closed` in real time while it moves, then settles to the steady status.
 - **Rich diagnostics** — battery voltage, mains/power supply status, safety-beam states, online/offline, fault and warranty flags, last-seen time, and Wi-Fi signal.
-- **Simple onboarding** — sign in with your phone number and a one-time SMS code, exactly like the app.
+- **Simple onboarding** — sign in with your phone number and a one-time PIN (delivered via WhatsApp or SMS), exactly like the app.
 
 ---
 
@@ -19,7 +19,7 @@ Control and monitor your Centurion **SMART Wi-Fi gate operator** (e.g. **D5 Evo 
 
 - **Home Assistant 2024.1 or newer.**
 - A **Centurion SMART Wi-Fi operator** that is already set up and working in the official **CenSys / MyCentsys Remote** app.
-- The **phone number** registered to that operator in the app (you'll receive an SMS code during setup).
+- The **phone number** registered to that operator in the app (you'll receive a one-time PIN during setup).
 - Home Assistant must have **outbound internet access** (the integration talks to Centurion's cloud).
 
 There are no extra Python packages to install by hand — Home Assistant installs everything the integration needs automatically on first start.
@@ -52,7 +52,9 @@ This repository **is** the integration, so its files go straight into a `centsys
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for **CenSys Gate Remote**.
-3. Enter the **phone number** registered to your gate (optionally a name/email). An **SMS code** is sent to that number.
+3. Enter the **phone number** registered to your gate (optionally a name/email), and choose how you'd like to receive your **one-time PIN**:
+   - **WhatsApp** *(default)* — the PIN arrives as a WhatsApp message, exactly as the official app does it. This is the method we've tested.
+   - **SMS** — the PIN is sent as a text message instead. This option is offered by Centurion's backend, but we haven't been able to verify it on every account, so if no code arrives, switch back to WhatsApp.
 4. Enter the **code** to finish. Your gate(s) appear as a device with all the entities below.
 
 If you have more than one operator on your account, all of them are added.
@@ -148,7 +150,7 @@ To turn debug logging back off, remove those lines and restart, or run the **Log
 ## Troubleshooting
 
 - **"CenSys Gate Remote" doesn't appear in Add Integration.** Make sure the files are at `config/custom_components/centsys_remote/` (with `manifest.json` directly inside) and that you did a **full restart**. Clear your browser cache if needed.
-- **No SMS code arrives.** Confirm the number is exactly the one registered in the CenSys app (including country code) and that it can receive SMS. You can retry the setup flow.
+- **No PIN arrives.** Confirm the number is exactly the one registered in the CenSys app (including country code). If you chose **SMS** and nothing comes through, retry the setup and pick **WhatsApp** instead (it's the channel we've confirmed working). Make sure the chosen app (WhatsApp or your messaging app) is reachable on that number.
 - **Gate won't open from HA but works in the app.** Check the operator is **Online** in HA, and that your account still has permission in the app. Enable debug logging and capture what happens when you press open.
 - **Battery voltage stays *unknown*.** Wait for a telemetry cycle (up to ~15 minutes), or restart HA. If it never populates, the operator may have been asleep/offline at each attempt — grab debug logs.
 - **State seems to lag.** Steady-state status refreshes about once a minute; live motion is tracked in real time during an open/close. Brief states between polls are expected to be smoothed by the live follow.

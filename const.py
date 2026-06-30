@@ -9,7 +9,12 @@ CONF_TOKEN = "token"
 CONF_NAME = "name"
 CONF_EMAIL = "email"
 
-DEFAULT_OTP_PLATFORM = 1
+# OTP delivery channel (matches the app's OtpPlatformEnum).
+OTP_PLATFORM_WHATSAPP = 1
+OTP_PLATFORM_SMS = 2
+DEFAULT_OTP_PLATFORM = OTP_PLATFORM_WHATSAPP
+
+CONF_OTP_PLATFORM = "otp_platform"
 
 # Cloud polling cadence (seconds) for device list + operator status.
 DEFAULT_SCAN_INTERVAL = 60
