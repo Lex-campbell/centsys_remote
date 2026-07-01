@@ -7,6 +7,7 @@ import time
 from datetime import timedelta
 from typing import Any
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -50,6 +51,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         )
         self._overview: dict[str, Any] = {}
         self._last_telemetry = 0.0
+        self._no_devices_notice = f"{DOMAIN}_no_devices_{entry.entry_id}"
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
@@ -67,6 +69,8 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         await self._maybe_refresh_telemetry(devices)
 
+        self._update_no_devices_notice(bool(serials))
+
         return {
             d.serial_number: {
                 "device": d,
@@ -76,6 +80,33 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             for d in devices
             if d.serial_number
         }
+
+    def dismiss_no_devices_notice(self) -> None:
+        """Clear the 'no gates linked' notification (e.g. on unload)."""
+        persistent_notification.async_dismiss(self.hass, self._no_devices_notice)
+
+    def _update_no_devices_notice(self, has_devices: bool) -> None:
+        """Show/clear a notification explaining an account with no linked gates.
+
+        New gates are picked up automatically on the next poll, so this simply
+        tells the user what to do and then clears itself once a gate appears.
+        """
+        if has_devices:
+            persistent_notification.async_dismiss(self.hass, self._no_devices_notice)
+            return
+        persistent_notification.async_create(
+            self.hass,
+            (
+                "You're signed in, but no gates are linked to this number yet.\n\n"
+                "Open the **MyCentsys Remote** app and make sure your gate appears "
+                "there for this phone number - the gate's admin needs to add your "
+                "number as a **remote user** (a direct/Bluetooth-only connection "
+                "isn't enough). Once it's linked, it will appear here automatically "
+                "within a minute; no restart needed."
+            ),
+            title="CenSys Gate Remote: no gates linked",
+            notification_id=self._no_devices_notice,
+        )
 
     async def _maybe_refresh_telemetry(self, devices: list[Any]) -> None:
         """Refresh cached MQTT telemetry for Wi-Fi operators, best-effort.

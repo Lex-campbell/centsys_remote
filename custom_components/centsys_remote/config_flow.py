@@ -95,6 +95,11 @@ class CentsysConfigFlow(ConfigFlow, domain=DOMAIN):
             except CentsysError:
                 errors["base"] = "cannot_connect"
             else:
+                # We create the entry even if no gates are linked yet: the
+                # coordinator re-checks on every poll and gates appear
+                # automatically once the number is added as a remote user. A
+                # persistent notification (see coordinator) explains the empty
+                # state in the meantime.
                 return self.async_create_entry(
                     title=self._name or self._number or "CenSys Gate",
                     data={

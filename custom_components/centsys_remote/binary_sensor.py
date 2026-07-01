@@ -18,7 +18,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
-from .entity import CentsysEntity
+from .entity import CentsysEntity, async_setup_dynamic_entities
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -69,10 +69,14 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: CentsysCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        CentsysBinarySensor(coordinator, serial, description)
-        for serial in coordinator.data
-        for description in BINARY_SENSORS
+    async_setup_dynamic_entities(
+        entry,
+        coordinator,
+        async_add_entities,
+        lambda serial: [
+            CentsysBinarySensor(coordinator, serial, description)
+            for description in BINARY_SENSORS
+        ],
     )
 
 

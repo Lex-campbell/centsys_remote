@@ -28,7 +28,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .api.exceptions import CentsysError
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
-from .entity import CentsysEntity
+from .entity import CentsysEntity, async_setup_dynamic_entities
 
 # How long to follow the live MQTT status stream after a press (covers the
 # open + auto-close cycle) and how long a live frame stays authoritative before
@@ -43,8 +43,11 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: CentsysCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(
-        CentsysGateCover(coordinator, serial) for serial in coordinator.data
+    async_setup_dynamic_entities(
+        entry,
+        coordinator,
+        async_add_entities,
+        lambda serial: [CentsysGateCover(coordinator, serial)],
     )
 
 
