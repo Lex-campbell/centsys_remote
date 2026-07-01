@@ -6,11 +6,13 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import CentsysRemoteClient
+from .api import CentsysRemoteClient, to_international_number
 from .api.exceptions import CentsysError, OtpInvalidError
 from .const import (
+    CONF_COUNTRY,
     CONF_EMAIL,
     CONF_MOBILE_NUMBER,
     CONF_NAME,
@@ -21,9 +23,23 @@ from .const import (
     OTP_PLATFORM_SMS,
     OTP_PLATFORM_WHATSAPP,
 )
+from .countries import COUNTRIES, DEFAULT_COUNTRY
+
+_DIAL_CODES = {iso: dial for iso, _name, dial in COUNTRIES}
+
+_COUNTRY_OPTIONS = [
+    selector.SelectOptionDict(value=iso, label=f"{name} (+{dial})")
+    for iso, name, dial in COUNTRIES
+]
 
 USER_SCHEMA = vol.Schema(
     {
+        vol.Required(CONF_COUNTRY, default=DEFAULT_COUNTRY): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=_COUNTRY_OPTIONS,
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        ),
         vol.Required(CONF_MOBILE_NUMBER): str,
         vol.Optional(CONF_NAME): str,
         vol.Optional(CONF_EMAIL): str,
@@ -58,26 +74,32 @@ class CentsysConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            self._number = user_input[CONF_MOBILE_NUMBER].strip()
+            country = user_input[CONF_COUNTRY]
+            self._number = to_international_number(
+                user_input[CONF_MOBILE_NUMBER], _DIAL_CODES[country]
+            )
             self._name = user_input.get(CONF_NAME)
             self._email = user_input.get(CONF_EMAIL)
             self._otp_platform = int(
                 user_input.get(CONF_OTP_PLATFORM, DEFAULT_OTP_PLATFORM)
             )
 
-            await self.async_set_unique_id(self._number)
-            self._abort_if_unique_id_configured()
-
-            session = async_get_clientsession(self.hass)
-            self._client = CentsysRemoteClient(self._number, session=session)
-            try:
-                sent = await self._client.send_otp(otp_platform=self._otp_platform)
-            except CentsysError:
-                errors["base"] = "cannot_connect"
+            if not self._number.lstrip("+").isdigit() or len(self._number) < 8:
+                errors["base"] = "invalid_number"
             else:
-                if sent:
-                    return await self.async_step_otp()
-                errors["base"] = "otp_not_sent"
+                await self.async_set_unique_id(self._number)
+                self._abort_if_unique_id_configured()
+
+                session = async_get_clientsession(self.hass)
+                self._client = CentsysRemoteClient(self._number, session=session)
+                try:
+                    sent = await self._client.send_otp(otp_platform=self._otp_platform)
+                except CentsysError:
+                    errors["base"] = "cannot_connect"
+                else:
+                    if sent:
+                        return await self.async_step_otp()
+                    errors["base"] = "otp_not_sent"
 
         return self.async_show_form(
             step_id="user", data_schema=USER_SCHEMA, errors=errors

@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 from typing import Any
 from urllib.parse import quote
@@ -33,6 +34,54 @@ from .exceptions import CentsysApiError, CentsysAuthError, OtpInvalidError
 from .models import Device, DeviceInfo, OperatorStatus
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def normalize_msisdn(number: str) -> str:
+    """Normalize a phone number to the ``+<country><national>`` form the backend
+    expects (matching what the official app sends).
+
+    The backend matches the remote-user number exactly, so formatting matters:
+    the app always sends full international form (e.g. ``+27832505442``). This
+    strips spaces/separators and converts a leading international ``00`` prefix
+    to ``+``. A number typed in national format (a single leading ``0`` with no
+    country code) can't be resolved to E.164 here and is returned digits-only,
+    which the config flow rejects so the user is prompted for the ``+`` form.
+    """
+    s = re.sub(r"[^\d+]", "", (number or "").strip())
+    if s.startswith("+"):
+        return "+" + re.sub(r"\D", "", s[1:])
+    if s.startswith("00"):
+        return "+" + s[2:]
+    return s
+
+
+def _remove_national_trunk_prefix(number: str, cc: str) -> str:
+    """Strip a national trunk prefix, mirroring the app's per-country rules."""
+    if number.startswith(cc) or len(number) < 3:
+        return number
+    if cc == "+52":
+        return number[2:] if number.startswith("01") else number
+    if cc == "+976":
+        return number[2:] if number.startswith(("01", "02")) else number
+    if cc == "+36":
+        return number[2:] if number.startswith("06") else number
+    if cc in ("+39", "+378", "+379", "+225"):
+        return number
+    return number[1:] if number.startswith("0") else number
+
+
+def to_international_number(number: str, dial_code: int) -> str:
+    """Combine a national number and a country dialing code into E.164 form.
+
+    Mirrors the official app: the national number is trimmed to digits (a
+    leading ``+`` block is kept as-is if it already carries the country code),
+    the national trunk prefix is removed, and the ``+<dial_code>`` is prepended.
+    """
+    trimmed = re.sub(r"[^0-9+]", "", (number or "").strip())
+    cc = f"+{dial_code}"
+    if trimmed.startswith(cc):
+        return trimmed
+    return cc + _remove_national_trunk_prefix(trimmed, cc)
 
 
 # Each token's exp is ~30 years past its creation time.
@@ -104,7 +153,7 @@ class CentsysRemoteClient:
             available) a fresh bearer is minted locally for the OTP calls.
         :param verify_ssl: set False only for debugging behind a proxy.
         """
-        self.mobile_number = mobile_number
+        self.mobile_number = normalize_msisdn(mobile_number)
         self._session = session
         self.device_info = device_info or DeviceInfo()
         self._session_token = session_token

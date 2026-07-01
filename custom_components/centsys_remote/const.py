@@ -5,6 +5,7 @@ from __future__ import annotations
 DOMAIN = "centsys_remote"
 
 CONF_MOBILE_NUMBER = "mobile_number"
+CONF_COUNTRY = "country"
 CONF_TOKEN = "token"
 CONF_NAME = "name"
 CONF_EMAIL = "email"

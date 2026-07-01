@@ -70,7 +70,7 @@ The integration code lives under `custom_components/centsys_remote/` in this rep
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for **CenSys Gate Remote**.
-3. Enter the **phone number** registered to your gate (optionally a name/email), and choose how you'd like to receive your **one-time PIN**:
+3. Select your **country** and enter your **mobile number** the same way you did in the app (your local number, e.g. `083 123 4567` — no need to add the country code yourself). Optionally add a name/email, then choose how you'd like to receive your **one-time PIN**:
    - **WhatsApp** *(default)* — the PIN arrives as a WhatsApp message, exactly as the official app does it. This is the method we've tested.
    - **SMS** — the PIN is sent as a text message instead. This option is offered by Centurion's backend, but we haven't been able to verify it on every account, so if no code arrives, switch back to WhatsApp.
 4. Enter the **code** to finish. Your gate(s) appear as a device with all the entities below.
@@ -168,7 +168,7 @@ To turn debug logging back off, remove those lines and restart, or run the **Log
 ## Troubleshooting
 
 - **"CenSys Gate Remote" doesn't appear in Add Integration.** Make sure the files are at `config/custom_components/centsys_remote/` (with `manifest.json` directly inside) and that you did a **full restart**. Clear your browser cache if needed.
-- **No PIN arrives.** Confirm the number is exactly the one registered in the CenSys app (including country code). If you chose **SMS** and nothing comes through, retry the setup and pick **WhatsApp** instead (it's the channel we've confirmed working). Make sure the chosen app (WhatsApp or your messaging app) is reachable on that number.
+- **No PIN arrives.** Confirm you selected the right **country** and entered the same mobile number you use in the CenSys app. If you chose **SMS** and nothing comes through, retry the setup and pick **WhatsApp** instead (it's the channel we've confirmed working). Make sure the chosen app (WhatsApp or your messaging app) is reachable on that number.
 - **A notification says "no gates linked" / the device has no entities.** Login worked, but no operator has your number added as a **remote user**. Open the official MyCentsys Remote app with the same number — if the gate isn't there either, get an admin to add your number as a remote user on the operator (or add/claim the gate to your account). It will then appear here automatically within about a minute — no restart needed. See [Requirements](#requirements).
 - **Gate won't open from HA but works in the app.** Check the operator is **Online** in HA, and that your account still has permission in the app. Enable debug logging and capture what happens when you press open.
 - **Battery voltage stays *unknown*.** Wait for a telemetry cycle (up to ~15 minutes), or restart HA. If it never populates, the operator may have been asleep/offline at each attempt — grab debug logs.

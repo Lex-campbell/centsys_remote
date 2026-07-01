@@ -3,9 +3,10 @@
     "step": {
       "user": {
         "title": "CenSys Gate Remote",
-        "description": "Enter the mobile number registered with the MyCentsys Remote app. A one-time PIN will be sent to it via WhatsApp or SMS.",
+        "description": "Choose your country and enter the mobile number registered with the MyCentsys Remote app (the same way you did in the app). A one-time PIN will be sent to it via WhatsApp or SMS.",
         "data": {
-          "mobile_number": "Mobile number (e.g. +27831234567)",
+          "country": "Country",
+          "mobile_number": "Mobile number (e.g. 083 123 4567)",
           "name": "Your name (optional)",
           "email": "Email (optional)",
           "otp_platform": "Send the one-time PIN via"
@@ -21,6 +22,7 @@
     },
     "error": {
       "cannot_connect": "Failed to connect to the CenSys backend.",
+      "invalid_number": "That doesn't look like a valid mobile number. Enter it as you would locally (e.g. 083 123 4567) with the correct country selected.",
       "invalid_otp": "That OTP was not accepted. Please try again.",
       "otp_not_sent": "The backend did not send an OTP. Check the number and try again."
     },
