@@ -27,7 +27,7 @@ from homeassistant.util import dt as dt_util
 from .api.enums import BEAM_STATE_OPTIONS
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
-from .entity import CentsysEntity, async_setup_dynamic_entities
+from .entity import CentsysEntity, CentsysGsmEntity, async_setup_dynamic_entities
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -147,17 +147,103 @@ SENSORS: tuple[CentsysSensorDescription, ...] = (
 )
 
 
+def _diag(attr: str) -> Callable[[dict[str, Any]], Any]:
+    """Return a field off the cached GSM/ULTRA diagnostics (MCRStatus)."""
+
+    def _inner(data: dict[str, Any]) -> Any:
+        diag = data.get("diag")
+        return getattr(diag, attr, None) if diag else None
+
+    return _inner
+
+
+GSM_SENSORS: tuple[CentsysSensorDescription, ...] = (
+    CentsysSensorDescription(
+        key="gsm_voltage",
+        translation_key="gsm_voltage",
+        device_class=SensorDeviceClass.VOLTAGE,
+        native_unit_of_measurement=UnitOfElectricPotential.VOLT,
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        suggested_display_precision=2,
+        value_fn=_diag("voltage"),
+    ),
+    CentsysSensorDescription(
+        key="gsm_signal",
+        translation_key="gsm_signal",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_diag("signal"),
+    ),
+    CentsysSensorDescription(
+        key="gsm_antenna",
+        translation_key="gsm_antenna",
+        device_class=SensorDeviceClass.ENUM,
+        options=["internal", "external"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_diag("antenna"),
+    ),
+    CentsysSensorDescription(
+        key="gsm_connection",
+        translation_key="gsm_connection",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_diag("connection"),
+    ),
+    CentsysSensorDescription(
+        key="gsm_network_type",
+        translation_key="gsm_network_type",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=_diag("network_type"),
+    ),
+    CentsysSensorDescription(
+        key="gsm_firmware",
+        translation_key="gsm_firmware",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_diag("firmware"),
+    ),
+    CentsysSensorDescription(
+        key="gsm_device_number",
+        translation_key="gsm_device_number",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_diag("number"),
+    ),
+    # Airtime tokens only populate after an in-app balance refresh, so they are
+    # usually empty on a normal read -> opt-in.
+    CentsysSensorDescription(
+        key="gsm_call_tokens",
+        translation_key="gsm_call_tokens",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_diag("call_tokens"),
+    ),
+    CentsysSensorDescription(
+        key="gsm_sms_tokens",
+        translation_key="gsm_sms_tokens",
+        state_class=SensorStateClass.MEASUREMENT,
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=_diag("sms_tokens"),
+    ),
+)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: CentsysCoordinator = hass.data[DOMAIN][entry.entry_id]
-    def _factory(serial: str):
-        data = coordinator.data.get(serial) or {}
-        if data.get("kind") != "wifi":
-            return []
-        return [CentsysSensor(coordinator, serial, description) for description in SENSORS]
+
+    def _factory(key: str):
+        data = coordinator.data.get(key) or {}
+        if data.get("kind") == "gsm":
+            return [CentsysGsmSensor(coordinator, key, d) for d in GSM_SENSORS]
+        if data.get("kind") == "wifi":
+            return [CentsysSensor(coordinator, key, d) for d in SENSORS]
+        return []
 
     async_setup_dynamic_entities(entry, coordinator, async_add_entities, _factory)
 
@@ -176,6 +262,29 @@ class CentsysSensor(CentsysEntity, SensorEntity):
         super().__init__(coordinator, serial)
         self.entity_description = description
         self._attr_unique_id = f"{serial}_{description.key}"
+
+    @property
+    def native_value(self) -> Any:
+        data = self._device_data
+        if not data:
+            return None
+        return self.entity_description.value_fn(data)
+
+
+class CentsysGsmSensor(CentsysGsmEntity, SensorEntity):
+    """A single diagnostic value for a legacy GSM/ULTRA operator."""
+
+    entity_description: CentsysSensorDescription
+
+    def __init__(
+        self,
+        coordinator: CentsysCoordinator,
+        key: str,
+        description: CentsysSensorDescription,
+    ) -> None:
+        super().__init__(coordinator, key)
+        self.entity_description = description
+        self._attr_unique_id = f"{key}_{description.key}"
 
     @property
     def native_value(self) -> Any:

@@ -93,7 +93,19 @@
       "last_seen": { "name": "Last seen" },
       "wifi_rssi": { "name": "Wi-Fi signal" },
       "battery_voltage": { "name": "Battery voltage" },
-      "operator_temperature": { "name": "Operator temperature" }
+      "operator_temperature": { "name": "Operator temperature" },
+      "gsm_voltage": { "name": "Voltage" },
+      "gsm_signal": { "name": "Signal strength" },
+      "gsm_antenna": {
+        "name": "Antenna",
+        "state": { "internal": "Internal", "external": "External" }
+      },
+      "gsm_connection": { "name": "Connection status" },
+      "gsm_network_type": { "name": "Network type" },
+      "gsm_firmware": { "name": "Firmware version" },
+      "gsm_device_number": { "name": "Device number" },
+      "gsm_call_tokens": { "name": "Call tokens remaining" },
+      "gsm_sms_tokens": { "name": "SMS tokens remaining" }
     }
   }
 }

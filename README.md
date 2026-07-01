@@ -1,6 +1,6 @@
 # CenSys Gate Remote for Home Assistant
 
-Control and monitor your Centurion **SMART Wi-Fi gate operator** (e.g. **D5 Evo SMART**) directly from Home Assistant — open and close the gate, see live open/closed status, and track battery, mains power, safety beams and more.
+Control and monitor your Centurion gate operator directly from Home Assistant — open and close the gate, see live open/closed status, and track battery, mains power, safety beams and more. Works with **SMART Wi-Fi operators** (e.g. **D5 Evo SMART**) and, experimentally, older **GSM/ULTRA** operators reached through a cellular module (see [Supported devices](#supported-devices)).
 
 > **Status: beta.** This is an unofficial, community-built integration and is not affiliated with or endorsed by Centurion Systems. It talks to the same cloud service the official CenSys app uses. Use at your own risk; feedback is very welcome (see [Giving feedback](#giving-feedback)).
 
@@ -17,10 +17,37 @@ Control and monitor your Centurion **SMART Wi-Fi gate operator** (e.g. **D5 Evo 
 
 ---
 
+## Supported devices
+
+The integration supports two connection types. Anything that shows up for your number in the official app should appear here too.
+
+### SMART Wi-Fi operators — full support
+
+Operators with built-in Wi-Fi. You get open/close with real-time live status, plus the full diagnostics set (battery voltage, mains/power supply, safety beams, temperature, Wi-Fi signal, fault/warranty, last seen).
+
+### GSM/ULTRA operators — experimental
+
+Older or non-Wi-Fi motors reached through a Centurion cellular module (e.g. **G-SPEAK ULTRA / G-ULTRA**). These are triggered over the cellular gateway rather than Wi-Fi, so:
+
+- **Open/close** works as a single-button trigger (a momentary pulse), just like the physical remote.
+- **Live open/closed position** is only available if the module has a **status-feedback input wired**. When present, the cover greys correctly; when not (most installs are trigger-only), the cover uses "assumed state" and both buttons stay pressable.
+- **Diagnostics** (as separate sensors): supply voltage, signal strength, antenna, firmware, connection status, network type (2G/3G/4G), device number, and — after an in-app balance refresh — call/SMS airtime tokens.
+
+### Known-good devices
+
+| Device | Connection | Status |
+| --- | --- | --- |
+| **Centurion D5 Evo SMART** | Wi-Fi | ✅ Fully tested |
+| **G-SPEAK ULTRA 3G** (with a Centurion operator) | GSM/cellular | ✅ Tested — control + diagnostics (no position feedback on that unit) |
+
+Using something not listed here? It will very likely still work — please let us know how it goes (see [Giving feedback](#giving-feedback)) so we can grow this list.
+
+---
+
 ## Requirements
 
 - **Home Assistant 2024.1 or newer.**
-- A **Centurion SMART Wi-Fi operator** that is already set up and working in the official **CenSys / MyCentsys Remote** app.
+- A **Centurion gate operator** (SMART Wi-Fi or GSM/ULTRA — see [Supported devices](#supported-devices)) already set up and working in the official **CenSys / MyCentsys Remote** app.
 - The **phone number** registered to that operator in the app (you'll receive a one-time PIN during setup).
 - Home Assistant must have **outbound internet access** (the integration talks to Centurion's cloud).
 - **The gate must be linked to your number as a remote user** (see below).
@@ -199,7 +226,7 @@ Always delete via the UI **before** removing the folder, so Home Assistant can c
 This is a beta — please report anything odd! When opening an issue, it helps to include:
 
 - Your Home Assistant version and how you run it (HAOS, Container, etc.).
-- Your operator model (e.g. D5 Evo SMART).
+- Your operator model and connection type (e.g. D5 Evo SMART over Wi-Fi, or a GSM module like G-SPEAK ULTRA).
 - What you expected vs. what happened.
 - Relevant **debug logs** (see [Enabling debug logging](#enabling-debug-logging)).
 

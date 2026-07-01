@@ -5,6 +5,7 @@ Field names mirror the JSON keys returned by the backend.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -153,6 +154,156 @@ class GsmDevice:
             online=_pick(data, "DeviceOnline", "Online"),
             is_admin=_pick(data, "DeviceAdmin", "IsAdmin"),
             ios=[GsmIo.from_json(io) for io in ios_raw if isinstance(io, dict)],
+            raw=data,
+        )
+
+
+# A gate-feedback IO reports its position as a single-character state id. The
+# app maps these characters to gate positions (see IoStateToDescriptionMapper).
+GSM_GATE_STATES: dict[str, str] = {
+    "0": "opening",
+    "1": "open",
+    "2": "closing",
+    "3": "closed",
+    "4": "running",  # moving, direction unknown
+}
+
+
+@dataclass
+class GsmStatus:
+    """Live IO states for a legacy GSM/ULTRA operator (AppIOStatesEN).
+
+    ``io_states`` is the list of per-IO state ids as returned in the ``IOList``.
+    An operator only reports a gate position if it has a status-feedback input
+    wired and configured; otherwise no IO carries a gate-state id and the gate
+    position is unknown (``gate_state`` is ``None``).
+    """
+
+    device_id: int
+    io_states: list[str] = field(default_factory=list)
+    online: bool = True
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def gate_state(self) -> str | None:
+        """Gate position ('open'/'closed'/'opening'/...) if a feedback IO reports it."""
+        if not self.online:
+            return None
+        for state in self.io_states:
+            label = GSM_GATE_STATES.get(str(state))
+            if label is not None:
+                return label
+        return None
+
+    @property
+    def has_feedback(self) -> bool:
+        return self.gate_state is not None
+
+    @property
+    def is_closed(self) -> bool | None:
+        state = self.gate_state
+        return None if state is None else state == "closed"
+
+    @property
+    def is_opening(self) -> bool:
+        return self.gate_state == "opening"
+
+    @property
+    def is_closing(self) -> bool:
+        return self.gate_state == "closing"
+
+    @classmethod
+    def from_root(cls, device_id: int | str, root: dict[str, Any]) -> "GsmStatus":
+        io_list = root.get("IOList") or root.get("ioList") or []
+        states: list[str] = []
+        if isinstance(io_list, list):
+            for entry in io_list:
+                if isinstance(entry, dict):
+                    value = _pick(entry, "IOStateID", "IoStateId", "IOStateId")
+                    if value is not None:
+                        states.append(str(value))
+        return cls(
+            device_id=int(device_id) if str(device_id).isdigit() else 0,
+            io_states=states,
+            online=True,
+            raw=root,
+        )
+
+
+# Airtime balance is reported by the device as "Call: <n> SMS: <n>".
+_AIRTIME_RE = re.compile(r"Call:\s*(\d+)\s*SMS:\s*(\d+)", re.IGNORECASE)
+_ANTENNA_LABELS = {0: "internal", 1: "external"}
+
+
+def _to_float(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    match = re.search(r"-?\d+(?:[.,]\d+)?", str(value))
+    return float(match.group().replace(",", ".")) if match else None
+
+
+def _to_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return int(value)
+    if value is None:
+        return None
+    match = re.search(r"-?\d+", str(value))
+    return int(match.group()) if match else None
+
+
+@dataclass
+class GsmDeviceStatus:
+    """Diagnostic status for a legacy GSM/ULTRA operator (MCRStatus).
+
+    Field names/formats are parsed defensively as the gateway is loosely typed.
+    """
+
+    device_id: int
+    online: bool = True
+    voltage: float | None = None
+    signal: int | None = None
+    antenna: str | None = None
+    firmware: str | None = None
+    connection: str | None = None
+    network_type: str | None = None
+    number: str | None = None
+    last_synced: str | None = None
+    call_tokens: int | None = None
+    sms_tokens: int | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_json(cls, device_id: int | str, data: dict[str, Any]) -> "GsmDeviceStatus":
+        antenna = _pick(data, "Antenna", "AntennaSelection")
+        if isinstance(antenna, int):
+            antenna = _ANTENNA_LABELS.get(antenna)
+        elif antenna:
+            antenna = str(antenna).lower()
+        conn = _pick(data, "OnlineStatus", "ConnectionStatus")
+        if isinstance(conn, bool):
+            conn = "Active" if conn else "Inactive"
+        elif conn not in (None, ""):
+            conn = str(conn)
+
+        call = sms = None
+        match = _AIRTIME_RE.search(str(_pick(data, "Airtime", "AirtimeMessage", default="")))
+        if match:
+            call, sms = int(match.group(1)), int(match.group(2))
+
+        return cls(
+            device_id=int(device_id) if str(device_id).isdigit() else 0,
+            voltage=_to_float(_pick(data, "Voltage")),
+            signal=_to_int(_pick(data, "Signal")),
+            antenna=antenna or None,
+            firmware=(_pick(data, "Firmware") or None),
+            connection=conn or None,
+            network_type=(_pick(data, "ConnectionType", "NetworkType") or None),
+            number=(_pick(data, "Number") or None),
+            last_synced=(_pick(data, "LastSynced", "AirtimeLastUpdated") or None),
+            call_tokens=call,
+            sms_tokens=sms,
             raw=data,
         )
 

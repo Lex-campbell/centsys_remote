@@ -58,6 +58,9 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._gsm_devices: list[Any] = []
         self._gsm_loaded = False
         self._last_gsm = 0.0
+        self._gsm_status: dict[str, Any] = {}
+        self._gsm_diag: dict[str, Any] = {}
+        self._last_gsm_diag = 0.0
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
@@ -75,6 +78,8 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         await self._maybe_refresh_telemetry(devices)
         await self._maybe_refresh_gsm()
+        await self._refresh_gsm_status()
+        await self._maybe_refresh_gsm_diag()
 
         data: dict[str, dict[str, Any]] = {
             d.serial_number: {
@@ -87,7 +92,12 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             if d.serial_number
         }
         for gsm in self._gsm_devices:
-            data[gsm.key] = {"kind": "gsm", "gsm_device": gsm}
+            data[gsm.key] = {
+                "kind": "gsm",
+                "gsm_device": gsm,
+                "status": self._gsm_status.get(gsm.key),
+                "diag": self._gsm_diag.get(gsm.key),
+            }
 
         has_devices = bool(data)
         if not has_devices:
@@ -210,6 +220,50 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             self._gsm_loaded = True
         except Exception as err:  # noqa: BLE001 - legacy config is best-effort
             _LOGGER.debug("GSM config fetch failed: %s", err)
+
+    async def _refresh_gsm_status(self) -> None:
+        """Refresh live IO states (gate position) for each GSM/ULTRA device.
+
+        The ``AppIOStatesEN`` poll is lightweight (no auth, short timeout) and is
+        the same status feed the app uses. Failures are swallowed and keep the
+        previous value; a device with no status-feedback input simply never
+        reports a gate position.
+        """
+        for gsm in self._gsm_devices:
+            status = await self._fetch_gsm_status(gsm.device_id)
+            if status is not None:
+                self._gsm_status[gsm.key] = status
+                _LOGGER.debug(
+                    "GSM %s (id=%s) IO states=%s -> gate=%s (online=%s)",
+                    gsm.name,
+                    gsm.device_id,
+                    status.io_states,
+                    status.gate_state,
+                    status.online,
+                )
+
+    async def _fetch_gsm_status(self, device_id: int | str) -> Any:
+        """Fetch one GSM device's live IO states, best-effort (returns None on error)."""
+        try:
+            return await self.client.get_gsm_io_states(device_id)
+        except Exception as err:  # noqa: BLE001 - status poll is best-effort
+            _LOGGER.debug("GSM IO-state fetch failed for %s: %s", device_id, err)
+            return None
+
+    async def _maybe_refresh_gsm_diag(self) -> None:
+        """Refresh GSM diagnostics (voltage/signal/airtime) on the slow cadence."""
+        now = time.monotonic()
+        if self._gsm_diag and (now - self._last_gsm_diag) < TELEMETRY_SCAN_INTERVAL:
+            return
+        self._last_gsm_diag = now
+        for gsm in self._gsm_devices:
+            try:
+                diag = await self.client.get_gsm_status(gsm.device_id)
+            except Exception as err:  # noqa: BLE001 - diagnostics are best-effort
+                _LOGGER.debug("GSM diagnostics fetch failed for %s: %s", gsm.device_id, err)
+                continue
+            if diag is not None:
+                self._gsm_diag[gsm.key] = diag
 
     async def _maybe_refresh_telemetry(self, devices: list[Any]) -> None:
         """Refresh cached MQTT telemetry for Wi-Fi operators, best-effort.

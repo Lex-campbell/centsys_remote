@@ -37,7 +37,14 @@ from .exceptions import (
     CentsysError,
     OtpInvalidError,
 )
-from .models import Device, DeviceInfo, GsmDevice, OperatorStatus
+from .models import (
+    Device,
+    DeviceInfo,
+    GsmDevice,
+    GsmDeviceStatus,
+    GsmStatus,
+    OperatorStatus,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -548,6 +555,70 @@ class CentsysRemoteClient:
         if result == "Config Required":
             raise CentsysError("Config required; refresh the device configuration")
         raise CentsysApiError(f"Activation failed: {result!r}", status=200, body=text)
+
+    async def get_gsm_io_states(self, device_id: int | str) -> GsmStatus | None:
+        """Fetch the live IO states for a legacy GSM/ULTRA device (AppIOStatesEN).
+
+        This is the lightweight status poll the app runs on a timer to show a
+        gate's live open/closed position. It is keyed only by the (base64)
+        device id and needs no token. Returns a :class:`GsmStatus`, or ``None``
+        if the gateway reports the device offline.
+        """
+        data = base64.b64encode(str(device_id).encode()).decode()
+        # encoded=True: send the base64 exactly (its '+', '/', '=' unescaped).
+        url = URL(
+            f"{const.GWEB_BASE}{const.EP_GWEB_IO_STATES}?data={data}",
+            encoded=True,
+        )
+        _, text = await self._request(
+            "GET",
+            url,
+            op="AppIOStatesEN",
+            accept="*/*",
+        )
+        # Response is a JSON-ish quoted string; unwrap escapes and quotes.
+        cleaned = text.replace("\\", "").strip().strip('"')
+        if not cleaned or cleaned == "Device is Offline":
+            return GsmStatus(
+                device_id=int(device_id) if str(device_id).isdigit() else 0,
+                online=False,
+            )
+        try:
+            root = json.loads(cleaned)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(root, dict):
+            return None
+        return GsmStatus.from_root(device_id, root)
+
+    async def get_gsm_status(self, device_id: int | str) -> GsmDeviceStatus | None:
+        """Fetch diagnostics for a GSM/ULTRA device (MCRStatus): voltage, signal,
+        firmware, antenna, connection, airtime tokens, etc.
+
+        Reads the last-known values (param "1"); it does not spend airtime by
+        waking the device. Returns ``None`` if the response can't be parsed.
+        """
+        if not self._gweb_token:
+            await self.fetch_gweb_token()
+        assert self._gweb_token is not None
+
+        parts = "|".join(
+            base64.b64encode(str(v).encode()).decode()
+            for v in (device_id, self._gweb_token, "1")
+        )
+        url = URL(f"{const.GWEB_BASE}{const.EP_GWEB_STATUS}?data={parts}", encoded=True)
+        _, text = await self._request("GET", url, op="MCRStatus", accept="*/*")
+        cleaned = text.replace("\\", "").strip().strip('"')
+        if not cleaned or cleaned == "Device is Offline":
+            did = int(device_id) if str(device_id).isdigit() else 0
+            return GsmDeviceStatus(device_id=did, online=False)
+        try:
+            data = json.loads(cleaned)
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        return GsmDeviceStatus.from_json(device_id, data)
 
     async def get_backup(self) -> Any:
         """Fetch the user's latest app backup from the GWeb ``RemotesAppBackup``
