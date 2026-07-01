@@ -5,10 +5,15 @@ Field names mirror the JSON keys returned by the backend.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from . import enums
+
+
+def _random_player_id() -> str:
+    return str(uuid.uuid4())
 
 
 @dataclass
@@ -19,7 +24,8 @@ class DeviceInfo:
     device_model: str = "iPhone17,2"
     device_platform: str = "iOS"
     operating_version: str = "26.5"
-    onesignal_player_id: str = ""  # set to a random UUID per install if empty
+    # A stable per-install OneSignal id; the GWeb config call rejects an empty one.
+    onesignal_player_id: str = field(default_factory=_random_player_id)
 
     @property
     def device_string(self) -> str:

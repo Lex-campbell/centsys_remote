@@ -30,7 +30,12 @@ from urllib.parse import quote
 import aiohttp
 
 from . import const
-from .exceptions import CentsysApiError, CentsysAuthError, OtpInvalidError
+from .exceptions import (
+    CentsysApiError,
+    CentsysAuthError,
+    CentsysError,
+    OtpInvalidError,
+)
 from .models import Device, DeviceInfo, OperatorStatus
 
 _LOGGER = logging.getLogger(__name__)
@@ -386,9 +391,16 @@ class CentsysRemoteClient:
             content_type="application/x-www-form-urlencoded",
             accept="*/*",
         )
-        gweb_token = self._parse_json(text)
-        if not isinstance(gweb_token, str) or not gweb_token:
+        encoded = self._parse_json(text)
+        if not isinstance(encoded, str) or not encoded:
             raise CentsysApiError(f"MCROTPNumb returned unexpected body: {text}")
+        # The response is base64; the real token ("<hex>|<base64>") is its decode.
+        try:
+            gweb_token = base64.b64decode(encoded.strip('"')).decode("utf-8")
+        except (ValueError, UnicodeDecodeError) as err:
+            raise CentsysApiError(
+                f"MCROTPNumb token could not be decoded: {err}"
+            ) from err
         self._gweb_token = gweb_token
         return gweb_token
 

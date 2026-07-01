@@ -114,17 +114,46 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         )
 
     async def _log_backup_diagnostic(self) -> None:
-        """Log the account's GWeb app backup when no gates are linked.
+        """Diagnose an account with no Wi-Fi gates (once per session).
 
-        ``GetDevicesByRemoteUserNumber`` only returns operators where this
-        number is a linked *remote user*. Some accounts see their gates in the
-        app via the app's cloud backup instead. Logging that backup here (once
-        per session, best-effort) lets a user enable debug logging and share
-        exactly what device inventory the backend holds for their number.
+        ``GetDevicesByRemoteUserNumber`` only returns SMART Wi-Fi operators
+        where this number is a linked *remote user*. GSM/ULTRA units (and older
+        non-Wi-Fi motors reached via an add-on module) live on the legacy GWeb
+        gateway instead. This probes both fallback sources and logs what the
+        backend holds, so a user can enable debug logging and share it.
         """
         if self._backup_diagnostic_done:
             return
         self._backup_diagnostic_done = True
+        await self._log_legacy_config()
+        await self._log_gweb_backup()
+
+    async def _log_legacy_config(self) -> None:
+        """Log the legacy GWeb device config (GSM/ULTRA devices show up here)."""
+        try:
+            buttons = await self.client.get_buttons()
+        except Exception as err:  # noqa: BLE001 - purely diagnostic
+            _LOGGER.debug("Legacy config diagnostic fetch failed: %s", err)
+            return
+
+        if isinstance(buttons, list) and buttons:
+            _LOGGER.info(
+                "No Wi-Fi gates for this number, but the legacy GWeb gateway "
+                "returned %s configured button(s) - this looks like a GSM/ULTRA "
+                "or non-Wi-Fi device, which this integration does not control "
+                "yet. Details logged at debug level.",
+                len(buttons),
+            )
+            _LOGGER.debug("Legacy GWeb device config for this number: %s", buttons)
+        else:
+            _LOGGER.info(
+                "Legacy GWeb gateway returned no configured devices for this "
+                "number either (response: %r).",
+                buttons,
+            )
+
+    async def _log_gweb_backup(self) -> None:
+        """Log the account's GWeb app backup (the app's restore source)."""
         try:
             backup = await self.client.get_backup()
         except Exception as err:  # noqa: BLE001 - purely diagnostic
@@ -132,11 +161,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             return
 
         if not backup:
-            _LOGGER.info(
-                "No gates linked to this number and no cloud backup is stored "
-                "for it either. The gate's admin needs to add your number as a "
-                "remote user in the MyCentsys Remote app."
-            )
+            _LOGGER.info("No cloud backup is stored for this number.")
             return
 
         operators = None
@@ -153,8 +178,8 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         count = len(operators) if isinstance(operators, list) else "unknown"
         _LOGGER.info(
-            "No gates returned for this number, but a cloud backup exists "
-            "(operators in backup: %s). Full backup logged at debug level.",
+            "A cloud backup exists for this number (operators in backup: %s). "
+            "Full backup logged at debug level.",
             count,
         )
         _LOGGER.debug("GWeb app backup for this number: %s", backup)
