@@ -23,6 +23,14 @@ Control and monitor your Centurion **SMART Wi-Fi gate operator** (e.g. **D5 Evo 
 - A **Centurion SMART Wi-Fi operator** that is already set up and working in the official **CenSys / MyCentsys Remote** app.
 - The **phone number** registered to that operator in the app (you'll receive a one-time PIN during setup).
 - Home Assistant must have **outbound internet access** (the integration talks to Centurion's cloud).
+- **The gate must be linked to your number as a remote user** (see below).
+
+> [!IMPORTANT]
+> **Your gate must appear in the official MyCentsys Remote app** when you log in with the phone number you'll use here. The integration only sees operators that have your number added as a **remote user** — a "direct"/Bluetooth-only connection is **not** enough.
+>
+> If you've only ever connected to the gate directly, ask whoever has **admin access** to the operator to add your cell number as a remote user (in the app, under the operator's users), or add/claim the operator to your own account first. A quick check: **if the gate doesn't show up in the official app for your number, it won't show up here either.**
+>
+> You can still add the integration before your gate is linked — it will sign in and show a notification explaining there are no gates yet. Once your number is added as a remote user, **the gate appears automatically within about a minute, no restart needed.**
 
 There are no extra Python packages to install by hand — Home Assistant installs everything the integration needs automatically on first start.
 
@@ -30,10 +38,18 @@ There are no extra Python packages to install by hand — Home Assistant install
 
 ## Installation
 
-This repository **is** the integration, so its files go straight into a `centsys_remote` folder under your Home Assistant `custom_components` directory.
+### HACS (custom repository)
 
-1. In your Home Assistant configuration directory, create the folder `custom_components/centsys_remote/` (create `custom_components` first if it doesn't exist).
-2. Download this repository — the green **Code → Download ZIP** button, or `git clone` — and copy **all of its files** into that folder, so you end up with:
+1. In HACS, open the **⋮** menu → **Custom repositories**.
+2. Add `https://github.com/lex-campbell/centsys_remote` with category **Integration**.
+3. Find **CenSys Gate Remote** in HACS, **Download** it, then **restart Home Assistant**.
+
+### Manual
+
+The integration code lives under `custom_components/centsys_remote/` in this repository. Copy that whole folder into your Home Assistant `custom_components` directory.
+
+1. Download this repository — the green **Code → Download ZIP** button, or `git clone`.
+2. Copy the repo's `custom_components/centsys_remote/` folder into your Home Assistant config so you end up with:
 
    ```
    <config>/custom_components/centsys_remote/__init__.py
@@ -41,12 +57,10 @@ This repository **is** the integration, so its files go straight into a `centsys
    ... (and the rest of the files)
    ```
 
-   - **HAOS / Supervised:** use the *Samba share* or *Studio Code Server* add-on to copy the files into `config/custom_components/centsys_remote/`.
-   - **Container / Core:** copy them into your mapped config directory, e.g. `scp -r centsys_remote/* user@homeassistant:/config/custom_components/centsys_remote/`.
+   - **HAOS / Supervised:** use the *Samba share* or *Studio Code Server* add-on to copy the folder into `config/custom_components/`.
+   - **Container / Core:** copy it into your mapped config directory, e.g. `scp -r custom_components/centsys_remote user@homeassistant:/config/custom_components/`.
 
 3. **Restart Home Assistant** (a full restart, not just "Quick reload"). On first boot it will install the integration's dependencies — give it a minute.
-
-> **HACS:** support is planned for a later release. For now, please use the manual method above.
 
 ---
 
@@ -155,6 +169,7 @@ To turn debug logging back off, remove those lines and restart, or run the **Log
 
 - **"CenSys Gate Remote" doesn't appear in Add Integration.** Make sure the files are at `config/custom_components/centsys_remote/` (with `manifest.json` directly inside) and that you did a **full restart**. Clear your browser cache if needed.
 - **No PIN arrives.** Confirm the number is exactly the one registered in the CenSys app (including country code). If you chose **SMS** and nothing comes through, retry the setup and pick **WhatsApp** instead (it's the channel we've confirmed working). Make sure the chosen app (WhatsApp or your messaging app) is reachable on that number.
+- **A notification says "no gates linked" / the device has no entities.** Login worked, but no operator has your number added as a **remote user**. Open the official MyCentsys Remote app with the same number — if the gate isn't there either, get an admin to add your number as a remote user on the operator (or add/claim the gate to your account). It will then appear here automatically within about a minute — no restart needed. See [Requirements](#requirements).
 - **Gate won't open from HA but works in the app.** Check the operator is **Online** in HA, and that your account still has permission in the app. Enable debug logging and capture what happens when you press open.
 - **Battery voltage stays *unknown*.** Wait for a telemetry cycle (up to ~15 minutes), or restart HA. If it never populates, the operator may have been asleep/offline at each attempt — grab debug logs.
 - **State seems to lag.** Steady-state status refreshes about once a minute; live motion is tracked in real time during an open/close. Brief states between polls are expected to be smoothed by the live follow.
