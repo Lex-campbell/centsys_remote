@@ -60,6 +60,7 @@ EP_GWEB_CONFIG = "/api/MCRConfEnV3"      # fetch configured buttons
 EP_GWEB_MUTE_STATUS = "/api/MCRMuteStatus"
 EP_GWEB_ADD_USER = "/api/AddOrUpdateRemotesUserUpdated/"          # smart.gweb
 EP_GWEB_BACKUP_META = "/api/RemotesAppBackup/GetLatestRemotesAppBackupMetaData"  # smart.gweb
+EP_GWEB_BACKUP = "/api/RemotesAppBackup/GetLatestRemotesAppBackup"  # smart.gweb
 EP_GWEB_ACCESS_SHARING = "/api/AccessSharing/GetAccessesByUserNumber"  # :4446
 
 # --- Client identity ------------------------------------------------------

@@ -462,6 +462,31 @@ class CentsysRemoteClient:
         )
         return self._parse_json(text)
 
+    async def get_backup(self) -> Any:
+        """Fetch the user's latest app backup from the GWeb ``RemotesAppBackup``
+        store (``smart.gweb.co.za``).
+
+        This is the same store the app restores from to populate its device
+        list, so it can surface operators that are not returned by
+        ``GetDevicesByRemoteUserNumber`` (e.g. gates only ever added locally).
+
+        Returns the parsed response object. The operator list lives inside the
+        ``SerializedVersionedBackup`` field as a nested JSON string.
+        """
+        url = const.GWEB_SMART_BASE + const.EP_GWEB_BACKUP
+        status, text = await self._request(
+            "POST",
+            url,
+            op="GetLatestRemotesAppBackup",
+            json_body={"UserNumber": self.mobile_number},
+            content_type="application/json",
+            # 404 = "No backups found for user"; a normal empty result, not a fault.
+            expected_status=(200, 404),
+        )
+        if status == 404:
+            return None
+        return self._parse_json(text)
+
     # -- MQTT client certificate ------------------------------------------
 
     async def get_certificate(self) -> dict[str, str]:

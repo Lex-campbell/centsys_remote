@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from datetime import timedelta
@@ -52,6 +53,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._overview: dict[str, Any] = {}
         self._last_telemetry = 0.0
         self._no_devices_notice = f"{DOMAIN}_no_devices_{entry.entry_id}"
+        self._backup_diagnostic_done = False
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
@@ -68,6 +70,9 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             raise UpdateFailed(str(err)) from err
 
         await self._maybe_refresh_telemetry(devices)
+
+        if not serials:
+            await self._log_backup_diagnostic()
 
         self._update_no_devices_notice(bool(serials))
 
@@ -107,6 +112,52 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             title="CenSys Gate Remote: no gates linked",
             notification_id=self._no_devices_notice,
         )
+
+    async def _log_backup_diagnostic(self) -> None:
+        """Log the account's GWeb app backup when no gates are linked.
+
+        ``GetDevicesByRemoteUserNumber`` only returns operators where this
+        number is a linked *remote user*. Some accounts see their gates in the
+        app via the app's cloud backup instead. Logging that backup here (once
+        per session, best-effort) lets a user enable debug logging and share
+        exactly what device inventory the backend holds for their number.
+        """
+        if self._backup_diagnostic_done:
+            return
+        self._backup_diagnostic_done = True
+        try:
+            backup = await self.client.get_backup()
+        except Exception as err:  # noqa: BLE001 - purely diagnostic
+            _LOGGER.debug("Backup diagnostic fetch failed: %s", err)
+            return
+
+        if not backup:
+            _LOGGER.info(
+                "No gates linked to this number and no cloud backup is stored "
+                "for it either. The gate's admin needs to add your number as a "
+                "remote user in the MyCentsys Remote app."
+            )
+            return
+
+        operators = None
+        if isinstance(backup, dict):
+            blob = backup.get("SerializedVersionedBackup") or backup.get("Backup")
+            decoded = backup
+            if isinstance(blob, str):
+                try:
+                    decoded = json.loads(blob)
+                except (json.JSONDecodeError, ValueError):
+                    decoded = backup
+            if isinstance(decoded, dict):
+                operators = decoded.get("Operators") or decoded.get("Devices")
+
+        count = len(operators) if isinstance(operators, list) else "unknown"
+        _LOGGER.info(
+            "No gates returned for this number, but a cloud backup exists "
+            "(operators in backup: %s). Full backup logged at debug level.",
+            count,
+        )
+        _LOGGER.debug("GWeb app backup for this number: %s", backup)
 
     async def _maybe_refresh_telemetry(self, devices: list[Any]) -> None:
         """Refresh cached MQTT telemetry for Wi-Fi operators, best-effort.
