@@ -44,7 +44,7 @@ There are no extra Python packages to install by hand — Home Assistant install
 2. Add `https://github.com/lex-campbell/centsys_remote` with category **Integration**.
 3. Find **CenSys Gate Remote** in HACS, **Download** it, then **restart Home Assistant**.
 
-### Manual
+### Manual (without HACS)
 
 The integration code lives under `custom_components/centsys_remote/` in this repository. Copy that whole folder into your Home Assistant `custom_components` directory.
 
