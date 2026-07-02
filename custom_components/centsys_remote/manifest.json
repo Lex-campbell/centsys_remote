@@ -1,12 +1,12 @@
 {
   "domain": "centsys_remote",
   "name": "CenSys Gate Remote",
-  "version": "0.2.4",
+  "codeowners": ["@lex-campbell"],
   "config_flow": true,
   "documentation": "https://github.com/lex-campbell/centsys_remote",
-  "issue_tracker": "https://github.com/lex-campbell/centsys_remote/issues",
-  "codeowners": ["@lex-campbell"],
-  "requirements": ["paho-mqtt>=2.1", "cryptography>=42"],
+  "integration_type": "hub",
   "iot_class": "cloud_polling",
-  "integration_type": "hub"
+  "issue_tracker": "https://github.com/lex-campbell/centsys_remote/issues",
+  "requirements": ["paho-mqtt>=2.1", "cryptography>=42"],
+  "version": "0.3.0"
 }
