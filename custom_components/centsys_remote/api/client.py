@@ -713,7 +713,7 @@ class CentsysRemoteClient:
         serial: str,
         *,
         mac: str | bytes,
-        product_code: int | None = None,
+        product_type: int | None = None,
         au: bool = False,
         timeout: float = 8.0,
     ) -> bool:
@@ -725,7 +725,7 @@ class CentsysRemoteClient:
 
         ``serial`` must be the LONG operator serial (the MQTT topic prefix).
         ``mac`` is the operator's ``macAddress`` from the device listing, used to
-        build the per-operator trigger packets. ``product_code`` selects the
+        build the per-operator trigger packets. ``product_type`` selects the
         trigger activation (garage-door operators differ from sliders/swings).
 
         Runs the blocking MQTT handshake in a thread so it is safe to await.
@@ -737,7 +737,7 @@ class CentsysRemoteClient:
         mac4 = packets.parse_mac(mac)
         cmd01 = packets.build_cmd01(self.mobile_number, mac4)
         cmd05 = packets.build_cmd05(mac4)
-        activation_id = packets.trigger_activation_id(product_code)
+        activation_id = packets.trigger_activation_id(product_type)
 
         cert = await self.get_certificate()
         cert_pem, key_pem = await asyncio.get_running_loop().run_in_executor(

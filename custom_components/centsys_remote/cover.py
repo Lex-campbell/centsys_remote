@@ -157,7 +157,7 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
             ok = await self.coordinator.client.open_gate(
                 self._serial,
                 mac=mac,
-                product_code=getattr(device, "product_code", None),
+                product_type=getattr(device, "product_type", None),
             )
         except CentsysError as err:
             raise HomeAssistantError(f"Failed to trigger gate: {err}") from err

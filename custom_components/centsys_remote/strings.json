@@ -91,6 +91,7 @@
         }
       },
       "last_seen": { "name": "Last seen" },
+      "product_type": { "name": "Product type" },
       "wifi_rssi": { "name": "Wi-Fi signal" },
       "battery_voltage": { "name": "Battery voltage" },
       "operator_temperature": { "name": "Operator temperature" },

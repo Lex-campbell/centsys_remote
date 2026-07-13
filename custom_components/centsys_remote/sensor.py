@@ -115,6 +115,12 @@ SENSORS: tuple[CentsysSensorDescription, ...] = (
         value_fn=_last_seen,
     ),
     CentsysSensorDescription(
+        key="product_type",
+        translation_key="product_type",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: data["device"].product_type,
+    ),
+    CentsysSensorDescription(
         key="wifi_rssi",
         device_class=SensorDeviceClass.SIGNAL_STRENGTH,
         native_unit_of_measurement=SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
