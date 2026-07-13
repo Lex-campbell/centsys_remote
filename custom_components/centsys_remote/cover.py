@@ -146,18 +146,22 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
         )
 
     async def _trigger(self) -> None:
-        device = self._device_data["device"] if self._device_data else None
+        data = self._device_data or {}
+        device = data.get("device")
         mac = getattr(device, "mac_address", None)
         if not mac:
             raise HomeAssistantError(
                 "Gate has no MAC address in the cloud device list; cannot build "
                 "the trigger packet."
             )
+        # Only garage-door operators emit the "sdo5" telemetry frame.
+        is_garage = getattr(data.get("overview"), "family", None) == "sdo5"
         try:
             ok = await self.coordinator.client.open_gate(
                 self._serial,
                 mac=mac,
                 product_type=getattr(device, "product_type", None),
+                is_garage=is_garage,
             )
         except CentsysError as err:
             raise HomeAssistantError(f"Failed to trigger gate: {err}") from err

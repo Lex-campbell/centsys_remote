@@ -14,22 +14,23 @@ import struct
 
 BASE_KEY = bytes.fromhex("38983fba4dbfab9c")
 
-# Activation id for the gate trigger. Sliders and swing operators trigger with
-# TRG; garage-door operators use RUN from their own activation set.
+# Trigger activation id: garage-door operators use RUN, others use TRG.
 ACTIVATION_TRG = 34
 ACTIVATION_GDO_RUN = 1
 
-# ``productType`` values that identify a garage-door operator (all other
-# operators trigger with TRG). These mirror the app's operator classification.
-GDO_PRODUCT_TYPES = frozenset({2, 50})
+# Known garage-door ``productType`` values (fast path; the live telemetry shape
+# is the authoritative signal, see ``is_garage``).
+GDO_PRODUCT_TYPES = frozenset({2, 50, 51})
 
 _ALGO_VERSION = 1
 _KEY_VERSION = 1
 
 
-def trigger_activation_id(product_type: int | None) -> int:
-    """Return the activation id that opens an operator of this product type."""
-    if product_type in GDO_PRODUCT_TYPES:
+def trigger_activation_id(
+    product_type: int | None = None, *, is_garage: bool = False
+) -> int:
+    """Return the activation id that opens an operator (RUN for garage, else TRG)."""
+    if is_garage or product_type in GDO_PRODUCT_TYPES:
         return ACTIVATION_GDO_RUN
     return ACTIVATION_TRG
 

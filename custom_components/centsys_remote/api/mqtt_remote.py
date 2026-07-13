@@ -36,7 +36,7 @@ _LOGGER = logging.getLogger(__name__)
 #
 # We auto-detect by the post-header length and decode the fields below.
 
-# Slider/swing operators (APPGATE_STATUS).
+# Slider/swing operators.
 _GATE_STATUS = {
     0: "open",
     1: "closed",
@@ -45,8 +45,7 @@ _GATE_STATUS = {
     4: "opening",
     5: "closing",
 }
-# Garage-door operators report a different status enum (APPMOBILE_DOOR_STATUS);
-# 6 (learn) and 7 (lost) have no cover equivalent and stay unknown.
+# Garage-door operators use a different status enum.
 _SDO_GATE_STATUS = {
     1: "open",
     2: "opening",
@@ -158,8 +157,7 @@ def parse_device_overview(payload: bytes) -> DeviceOverview:
         raise ValueError(f"unrecognized deviceOverview length: {n} bytes")
 
     temp_c = temp if temp is None else (temp - 256 if temp > 127 else temp)
-    # Garage-door operators use a distinct status enum and report battery in
-    # tenths of a volt (24V system) rather than hundredths like the sliders.
+    # Garage-door operators use a distinct status enum and battery scale.
     is_sdo = family == "sdo5"
     status_map = _SDO_GATE_STATUS if is_sdo else _GATE_STATUS
     batt_divisor = 10.0 if is_sdo else 100.0
