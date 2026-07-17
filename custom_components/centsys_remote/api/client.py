@@ -742,10 +742,7 @@ class CentsysRemoteClient:
 
         cert = await self.get_certificate()
         cert_pem, key_pem = await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: mqtt_remote.pfx_to_pem(
-                cert["pfx_base64"], cert["password"], check_validity=True
-            ),
+            None, mqtt_remote.pfx_to_pem, cert["pfx_base64"], cert["password"]
         )
 
         client_id = f"{const.MQTT_CLIENT_ID_PREFIX}{self.mobile_number}"
