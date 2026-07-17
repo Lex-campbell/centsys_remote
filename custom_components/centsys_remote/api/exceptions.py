@@ -12,13 +12,14 @@ class CentsysAuthError(CentsysError):
 
 
 class CentsysCertExpiredError(CentsysError):
-    """The client certificate issued by the backend is expired or not yet valid.
+    """The MQTT broker rejected the TLS handshake citing an expired certificate.
 
-    This is a provider-side condition: the backend hands out a shared,
-    time-limited certificate used for the MQTT connection. When it lapses the
-    broker rejects the TLS handshake for every client (the official app
-    included) until the provider rotates it. There is nothing to fix locally;
-    the integration recovers automatically once a valid certificate is served.
+    This is a provider-side condition: the broker itself refuses the connection,
+    so it affects every client (the official app included), not just this
+    integration. There is nothing to fix locally; gate control resumes once
+    Centsys resolves it on their end. Note the broker normally tolerates a
+    client certificate a little past its notAfter, so this is raised only when
+    the broker actively rejects the connection.
     """
 
 

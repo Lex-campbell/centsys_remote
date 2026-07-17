@@ -301,10 +301,10 @@ def open_gate_blocking(
                 from .exceptions import CentsysCertExpiredError
 
                 raise CentsysCertExpiredError(
-                    "The Centsys server rejected the connection with an expired "
-                    "certificate. This is a provider-side outage that also affects "
-                    "the official Centsys app; it will recover automatically once "
-                    "Centsys renews the certificate."
+                    "The Centsys broker rejected the connection citing an expired "
+                    "certificate. This is a provider-side outage that affects all "
+                    "clients (the official app included); gate control resumes once "
+                    "Centsys resolves it."
                 ) from err
             raise
         client.loop_start()
