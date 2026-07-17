@@ -11,6 +11,17 @@ class CentsysAuthError(CentsysError):
     """Authentication failed or no valid session token is available."""
 
 
+class CentsysCertExpiredError(CentsysError):
+    """The client certificate issued by the backend is expired or not yet valid.
+
+    This is a provider-side condition: the backend hands out a shared,
+    time-limited certificate used for the MQTT connection. When it lapses the
+    broker rejects the TLS handshake for every client (the official app
+    included) until the provider rotates it. There is nothing to fix locally;
+    the integration recovers automatically once a valid certificate is served.
+    """
+
+
 class OtpInvalidError(CentsysAuthError):
     """ValidateOtp returned an empty response, meaning the OTP was rejected."""
 

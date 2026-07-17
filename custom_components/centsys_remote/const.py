@@ -35,6 +35,6 @@ GSM_SCAN_INTERVAL = 300
 AIRTIME_POLL_INTERVAL = 8
 AIRTIME_POLL_ATTEMPTS = 12
 
-PLATFORMS = ["binary_sensor", "button", "cover", "sensor"]
+PLATFORMS = ["binary_sensor", "button", "cover", "sensor", "switch"]
 
 MANUFACTURER = "Centurion Systems (CenSys)"

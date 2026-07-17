@@ -78,6 +78,30 @@ class CentsysEntity(CoordinatorEntity[CentsysCoordinator]):
         )
 
 
+# Presentation for a configured GSM/ULTRA output, matched on its IO name. Each
+# tuple is (keywords, friendly label, icon); the first keyword found in the
+# (upper-cased) IO name wins, so order most-specific first.
+_GSM_IO_PRESENTATION: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (("PED", "PEDEST"), "Pedestrian", "mdi:walk"),
+    (("GRGS", "GRG", "GDO", "GARAGE"), "Garage", "mdi:garage"),
+    (("LGHT", "LIGHT", "LGT", "LAMP"), "Light", "mdi:lightbulb"),
+    (("LCK", "LOCK"), "Lock", "mdi:lock"),
+    (("STOP",), "Stop", "mdi:stop"),
+    (("HLD", "HOLD"), "Hold Open", "mdi:gate-open"),
+    (("TRG", "TRIGGER", "GATE"), "Gate", "mdi:boom-gate"),
+)
+_GSM_IO_DEFAULT_ICON = "mdi:gesture-tap-button"
+
+
+def gsm_io_presentation(io_name: str, io_number: int) -> tuple[str, str]:
+    """Return a (label, icon) for a GSM output from its configured IO name."""
+    name = (io_name or "").upper()
+    for keywords, label, icon in _GSM_IO_PRESENTATION:
+        if any(k in name for k in keywords):
+            return label, icon
+    return (io_name.strip() or f"Output {io_number}"), _GSM_IO_DEFAULT_ICON
+
+
 class CentsysGsmEntity(CoordinatorEntity[CentsysCoordinator]):
     """Common base for a legacy GSM/ULTRA operator (keyed by ``gsm-<id>``)."""
 
@@ -97,6 +121,12 @@ class CentsysGsmEntity(CoordinatorEntity[CentsysCoordinator]):
         return data.get("gsm_device") if data else None
 
     @property
+    def _status(self):
+        """The cached live IO status (``GsmStatus``) for this operator, if any."""
+        data = self._device_data
+        return data.get("status") if data else None
+
+    @property
     def available(self) -> bool:
         return super().available and self._device_data is not None
 
@@ -110,3 +140,14 @@ class CentsysGsmEntity(CoordinatorEntity[CentsysCoordinator]):
             manufacturer=MANUFACTURER,
             model="GSM/ULTRA operator",
         )
+
+
+class CentsysGsmIoEntity(CentsysGsmEntity):
+    """Base for an entity bound to a single configurable IO of an operator."""
+
+    def __init__(self, coordinator: CentsysCoordinator, key: str, io) -> None:
+        super().__init__(coordinator, key)
+        self._io_number = io.io_number
+        label, icon = gsm_io_presentation(io.io_name, io.io_number)
+        self._attr_name = label
+        self._attr_icon = icon

@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .api.exceptions import CentsysError
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
-from .entity import CentsysGsmEntity, async_setup_dynamic_entities
+from .entity import CentsysGsmEntity, CentsysGsmIoEntity, async_setup_dynamic_entities
 
 
 async def async_setup_entry(
@@ -24,9 +24,21 @@ async def async_setup_entry(
 
     def _factory(key: str):
         data = coordinator.data.get(key) or {}
-        if data.get("kind") == "gsm":
-            return [CentsysGsmAirtimeButton(coordinator, key)]
-        return []
+        if data.get("kind") != "gsm":
+            return []
+        entities: list[ButtonEntity] = [CentsysGsmAirtimeButton(coordinator, key)]
+        device = data.get("gsm_device")
+        if device is not None:
+            # The gate trigger is the cover; expose every other momentary output
+            # (pedestrian, garage, ...) as its own button. Two-state outputs are
+            # switches instead, so they are skipped here.
+            gate_io = device.trigger_io
+            gate_number = gate_io.io_number if gate_io else None
+            for io in device.ios:
+                if io.io_number == gate_number or io.entity_kind != "button":
+                    continue
+                entities.append(CentsysGsmIoButton(coordinator, key, io))
+        return entities
 
     async_setup_dynamic_entities(entry, coordinator, async_add_entities, _factory)
 
@@ -54,3 +66,29 @@ class CentsysGsmAirtimeButton(CentsysGsmEntity, ButtonEntity):
         except CentsysError as err:
             raise HomeAssistantError(f"Couldn't request airtime: {err}") from err
         self.coordinator.async_schedule_airtime_refresh(self._key, device.device_id)
+
+
+class CentsysGsmIoButton(CentsysGsmIoEntity, ButtonEntity):
+    """A momentary auxiliary output (IO) on a GSM/ULTRA operator.
+
+    Pressing sends an activation pulse to the operator's IO -- the same action as
+    tapping that button in the official app. The main gate trigger is the cover
+    entity, so only the other momentary outputs surface here.
+    """
+
+    def __init__(self, coordinator: CentsysCoordinator, key: str, io) -> None:
+        super().__init__(coordinator, key, io)
+        self._attr_unique_id = f"{key}_io_{io.io_number}"
+
+    async def async_press(self) -> None:
+        device = self._gsm_device
+        if device is None:
+            raise HomeAssistantError("This gate is no longer available.")
+        try:
+            await self.coordinator.client.trigger_gsm_activation(
+                device.device_id, self._io_number
+            )
+        except CentsysError as err:
+            raise HomeAssistantError(
+                f"Failed to activate {self._attr_name}: {err}"
+            ) from err

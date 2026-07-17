@@ -183,7 +183,9 @@ def parse_device_overview(payload: bytes) -> DeviceOverview:
     )
 
 
-def pfx_to_pem(pfx_b64: str, password: str) -> tuple[bytes, bytes]:
+def pfx_to_pem(
+    pfx_b64: str, password: str, *, check_validity: bool = False
+) -> tuple[bytes, bytes]:
     """Convert a base64 PKCS#12 blob into (cert_pem, key_pem) byte strings."""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.serialization import pkcs12
@@ -193,6 +195,8 @@ def pfx_to_pem(pfx_b64: str, password: str) -> tuple[bytes, bytes]:
     key, cert, _extra = pkcs12.load_key_and_certificates(raw, pwd)
     if cert is None or key is None:
         raise ValueError("PKCS#12 blob missing certificate or private key")
+    if check_validity:
+        _assert_cert_valid(cert)
     cert_pem = cert.public_bytes(serialization.Encoding.PEM)
     key_pem = key.private_bytes(
         serialization.Encoding.PEM,
@@ -200,6 +204,36 @@ def pfx_to_pem(pfx_b64: str, password: str) -> tuple[bytes, bytes]:
         serialization.NoEncryption(),
     )
     return cert_pem, key_pem
+
+
+def _assert_cert_valid(cert) -> None:
+    """Raise CentsysCertExpiredError if ``cert`` is expired or not yet valid."""
+    from datetime import datetime, timezone
+
+    from .exceptions import CentsysCertExpiredError
+
+    now = datetime.now(timezone.utc)
+    # ``*_utc`` accessors exist on cryptography >= 42; fall back for older ones.
+    not_after = getattr(cert, "not_valid_after_utc", None)
+    if not_after is None:
+        not_after = cert.not_valid_after.replace(tzinfo=timezone.utc)
+    not_before = getattr(cert, "not_valid_before_utc", None)
+    if not_before is None:
+        not_before = cert.not_valid_before.replace(tzinfo=timezone.utc)
+
+    if now > not_after:
+        raise CentsysCertExpiredError(
+            "The Centsys server certificate expired on "
+            f"{not_after:%Y-%m-%d %H:%M UTC}. This is a provider-side outage that "
+            "also affects the official Centsys app; it will recover automatically "
+            "once Centsys renews the certificate."
+        )
+    if now < not_before:
+        raise CentsysCertExpiredError(
+            "The Centsys server certificate is not valid until "
+            f"{not_before:%Y-%m-%d %H:%M UTC}; check that this device's clock is "
+            "correct, otherwise wait for the provider to activate it."
+        )
 
 
 def open_gate_blocking(
@@ -294,7 +328,19 @@ def open_gate_blocking(
         ctx.load_cert_chain(certfile=cert_file, keyfile=key_file)
         client.tls_set_context(ctx)
 
-        client.connect(host, port, keepalive=30, clean_start=True)
+        try:
+            client.connect(host, port, keepalive=30, clean_start=True)
+        except ssl.SSLError as err:
+            if "CERTIFICATE_EXPIRED" in str(err).upper():
+                from .exceptions import CentsysCertExpiredError
+
+                raise CentsysCertExpiredError(
+                    "The Centsys server rejected the connection with an expired "
+                    "certificate. This is a provider-side outage that also affects "
+                    "the official Centsys app; it will recover automatically once "
+                    "Centsys renews the certificate."
+                ) from err
+            raise
         client.loop_start()
 
         if not subscribed.wait(timeout):

@@ -26,7 +26,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api.exceptions import CentsysError
+from .api.exceptions import CentsysCertExpiredError, CentsysError
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
 from .entity import CentsysEntity, CentsysGsmEntity, async_setup_dynamic_entities
@@ -163,6 +163,8 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
                 product_type=getattr(device, "product_type", None),
                 is_garage=is_garage,
             )
+        except CentsysCertExpiredError as err:
+            raise HomeAssistantError(str(err)) from err
         except CentsysError as err:
             raise HomeAssistantError(f"Failed to trigger gate: {err}") from err
         if not ok:
@@ -202,11 +204,6 @@ class CentsysGsmGateCover(CentsysGsmEntity, CoverEntity):
         self._live_status: str | None = None
         self._live_expiry = 0.0
         self._polling = False
-
-    @property
-    def _status(self):
-        data = self._device_data
-        return data.get("status") if data else None
 
     def _live(self) -> str | None:
         if self._live_status and time.monotonic() < self._live_expiry:

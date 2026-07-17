@@ -54,7 +54,7 @@ def normalize_msisdn(number: str) -> str:
     expects (matching what the official app sends).
 
     The backend matches the remote-user number exactly, so formatting matters:
-    the app always sends full international form (e.g. ``+27832505442``). This
+    the app always sends full international form (e.g. ``+27821234567``). This
     strips spaces/separators and converts a leading international ``00`` prefix
     to ``+``. A number typed in national format (a single leading ``0`` with no
     country code) can't be resolved to E.164 here and is returned digits-only,
@@ -157,7 +157,7 @@ class CentsysRemoteClient:
         verify_ssl: bool = True,
     ) -> None:
         """
-        :param mobile_number: E.164 number, e.g. "+27832505442".
+        :param mobile_number: E.164 number, e.g. "+27821234567".
         :param session: an aiohttp ClientSession (caller owns its lifecycle).
         :param device_info: client identity sent to the backend.
         :param session_token: an existing long-lived JWT to reuse (skips OTP login).
@@ -742,7 +742,10 @@ class CentsysRemoteClient:
 
         cert = await self.get_certificate()
         cert_pem, key_pem = await asyncio.get_running_loop().run_in_executor(
-            None, mqtt_remote.pfx_to_pem, cert["pfx_base64"], cert["password"]
+            None,
+            lambda: mqtt_remote.pfx_to_pem(
+                cert["pfx_base64"], cert["password"], check_validity=True
+            ),
         )
 
         client_id = f"{const.MQTT_CLIENT_ID_PREFIX}{self.mobile_number}"

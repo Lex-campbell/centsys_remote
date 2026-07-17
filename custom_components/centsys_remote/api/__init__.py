@@ -6,6 +6,7 @@ from .exceptions import (
     CentsysError,
     CentsysAuthError,
     CentsysApiError,
+    CentsysCertExpiredError,
     OtpInvalidError,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "CentsysError",
     "CentsysAuthError",
     "CentsysApiError",
+    "CentsysCertExpiredError",
     "OtpInvalidError",
 ]

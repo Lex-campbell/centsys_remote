@@ -95,6 +95,9 @@ class GsmIo:
     io_number: int
     io_name: str = ""
     io_direction: int | None = None
+    on_state_name: str = ""
+    off_state_name: str = ""
+    state_name_visible: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -103,6 +106,9 @@ class GsmIo:
             io_number=int(_pick(data, "IONumber", "IoNumber", default=0)),
             io_name=str(_pick(data, "IOName", "IoName", default="") or ""),
             io_direction=_pick(data, "IODirection", "IoDirection"),
+            on_state_name=str(_pick(data, "OnStateName", default="") or ""),
+            off_state_name=str(_pick(data, "OffStateName", default="") or ""),
+            state_name_visible=bool(_pick(data, "StateNameVisible", default=False)),
             raw=data,
         )
 
@@ -111,6 +117,23 @@ class GsmIo:
         """Whether this IO looks like the main gate trigger (TRG/gate)."""
         name = self.io_name.upper()
         return any(tag in name for tag in ("TRG", "TRIGGER", "GATE"))
+
+    @property
+    def has_named_states(self) -> bool:
+        """Whether this IO reports a two-state (on/off) position with labels."""
+        return bool(self.state_name_visible and self.on_state_name and self.off_state_name)
+
+    @property
+    def entity_kind(self) -> str:
+        """How this IO should surface in HA: 'switch', 'binary_sensor', or 'button'.
+
+        A two-state output is a switch; a two-state input is a read-only sensor;
+        anything else is a momentary button. The main gate trigger is handled by
+        the cover and excluded by the callers, not here.
+        """
+        if self.has_named_states:
+            return "binary_sensor" if self.io_direction == 1 else "switch"
+        return "button"
 
 
 @dataclass
@@ -170,6 +193,17 @@ GSM_GATE_STATES: dict[int, str] = {
     52: "running",
 }
 
+# Reported state ids for a two-state (on/off) IO. Values outside this range
+# carry no on/off meaning and are treated as unknown.
+_GSM_IO_ONOFF_RANGE = range(88, 100)
+
+
+def gsm_io_is_on(state_id: int | None) -> bool | None:
+    """Interpret a two-state IO's reported state id as on/off, else None."""
+    if state_id is None or state_id not in _GSM_IO_ONOFF_RANGE:
+        return None
+    return state_id % 2 == 0
+
 
 @dataclass
 class GsmStatus:
@@ -183,8 +217,15 @@ class GsmStatus:
 
     device_id: int
     io_states: list[str] = field(default_factory=list)
+    io_state_by_number: dict[int, int] = field(default_factory=dict)
     online: bool = True
     raw: dict[str, Any] = field(default_factory=dict)
+
+    def is_on(self, io_number: int) -> bool | None:
+        """On/off for a two-state IO by its number, or None if unknown."""
+        if not self.online:
+            return None
+        return gsm_io_is_on(self.io_state_by_number.get(io_number))
 
     @property
     def gate_state(self) -> str | None:
@@ -222,15 +263,24 @@ class GsmStatus:
     def from_root(cls, device_id: int | str, root: dict[str, Any]) -> "GsmStatus":
         io_list = root.get("IOList") or root.get("ioList") or []
         states: list[str] = []
+        by_number: dict[int, int] = {}
         if isinstance(io_list, list):
             for entry in io_list:
-                if isinstance(entry, dict):
-                    value = _pick(entry, "IOStateID", "IoStateId", "IOStateId")
-                    if value is not None:
-                        states.append(str(value))
+                if not isinstance(entry, dict):
+                    continue
+                value = _pick(entry, "IOStateID", "IoStateId", "IOStateId")
+                if value is None:
+                    continue
+                states.append(str(value))
+                number = _pick(entry, "IONumber", "IoNumber")
+                try:
+                    by_number[int(number)] = int(value)
+                except (TypeError, ValueError):
+                    pass
         return cls(
             device_id=int(device_id) if str(device_id).isdigit() else 0,
             io_states=states,
+            io_state_by_number=by_number,
             online=True,
             raw=root,
         )

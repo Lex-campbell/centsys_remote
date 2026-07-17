@@ -12,6 +12,7 @@ Control and monitor your Centurion gate operator directly from Home Assistant �
 
 - **Gate cover** — open / close from the dashboard, automations, voice assistants, etc.
 - **Live status** — the gate animates `opening → open → closing → closed` in real time while it moves, then settles to the steady status.
+- **Auxiliary outputs (GSM/ULTRA)** — extra operator IOs such as pedestrian, lock, garage or courtesy light appear as their own buttons (or switches for two-state outputs), mirroring the app's button list.
 - **Rich diagnostics** — battery voltage, mains/power supply status, safety-beam states, online/offline, fault and warranty flags, last-seen time, and Wi-Fi signal.
 - **Simple onboarding** — sign in with your phone number and a one-time PIN (delivered via WhatsApp or SMS), exactly like the app.
 
@@ -30,6 +31,7 @@ Operators with built-in Wi-Fi. You get open/close with real-time live status, pl
 Older or non-Wi-Fi motors reached through a Centurion cellular module (e.g. **G-SPEAK ULTRA / G-ULTRA**). These are triggered over the cellular gateway rather than Wi-Fi, so:
 
 - **Open/close** works as a single-button trigger (a momentary pulse), just like the physical remote.
+- **Auxiliary outputs** — any additional configured outputs (pedestrian, lock, garage, courtesy light, ...) surface as separate entities: momentary outputs as **buttons**, two-state outputs as **switches**, and status-feedback inputs as **binary sensors** — matching the buttons you see in the app.
 - **Live open/closed position** is only available if the module has a **status-feedback input wired**. When present, the cover greys correctly; when not (most installs are trigger-only), the cover uses "assumed state" and both buttons stay pressable.
 - **Diagnostics** (as separate sensors): supply voltage, signal strength, antenna, firmware, connection status, network type (2G/3G/4G), device number, and — on prepaid SIMs, after pressing **Refresh airtime** — call/SMS token counts.
 
@@ -37,8 +39,12 @@ Older or non-Wi-Fi motors reached through a Centurion cellular module (e.g. **G-
 
 | Device | Connection | Status |
 | --- | --- | --- |
-| **Centurion D5 Evo SMART** | Wi-Fi | ✅ Fully tested |
-| **G-SPEAK ULTRA 3G** (with a Centurion operator) | GSM/cellular | ✅ Tested — control + diagnostics (no position feedback on that unit) |
+| **Centurion D5 Evo SMART** | Wi-Fi | ✅ Fully tested — control + live status + diagnostics |
+| **Centurion D6 SMART+** | Wi-Fi | ✅ Tested — control + live status + diagnostics |
+| **Centurion SD05 SMART+** (garage door) | Wi-Fi | ✅ Tested — control + live status |
+| **G-SPEAK 4G** module | GSM/cellular | ✅ Tested — gate + auxiliary IOs (pedestrian, lock) |
+| **G-ULTRA 3G** module | GSM/cellular | ✅ Tested — gate + auxiliary IOs (pedestrian, lock, garage) |
+| **G-ULTRA 2G** module | GSM/cellular | ✅ Tested — gate + auxiliary IOs (pedestrian, lock, courtesy light) |
 
 Using something not listed here? It will very likely still work — please let us know how it goes (see [Giving feedback](#giving-feedback)) so we can grow this list.
 
@@ -115,6 +121,8 @@ Each gate operator becomes one device. The main control is the **cover**; everyt
 | Entity | What it does |
 | --- | --- |
 | **Gate** (cover) | Open / close the gate. Centurion operators are single-button triggers, so both buttons pulse the gate and it decides direction from its current position — just like the physical remote. The control greys out to reflect the current state (open disabled when already open, etc.). |
+| **Auxiliary outputs** (buttons) | On GSM/ULTRA operators, each additional configured output (pedestrian, lock, garage, ...) becomes a button that sends its activation pulse. |
+| **Two-state outputs** (switches) | A latching output that reports on/off (e.g. a courtesy light) appears as a switch; toggling it sends the operator's activation. State shows once the operator reports it. |
 
 ### Sensors
 
@@ -136,6 +144,7 @@ Each gate operator becomes one device. The main control is the **cover**; everyt
 | **Online** | Whether the operator is currently reachable. |
 | **Fault** | Operator-reported fault/health problem. |
 | **Warranty void** | Warranty flag (disabled by default). |
+| **Status inputs** (GSM/ULTRA) | Configured feedback inputs that report on/off appear as binary sensors. |
 
 > Sensors marked *disabled by default* won't appear until you enable them: open the device, click the entity, then the cog → **Enable**.
 
@@ -231,6 +240,12 @@ This is a beta — please report anything odd! When opening an issue, it helps t
 - Relevant **debug logs** (see [Enabling debug logging](#enabling-debug-logging)).
 
 Thanks for testing!
+
+---
+
+## Support this project
+
+I build and maintain this in my spare time. If it saved you some hassle and you'd like to say thanks, you can **[buy me a coffee](https://donatr.ee/lexc?utm_source=copy&utm_medium=share)** — it helps me keep building and maintaining it. Totally optional, and hugely appreciated. ☕
 
 ---
 
