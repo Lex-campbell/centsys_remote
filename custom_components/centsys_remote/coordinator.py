@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     GSM_SCAN_INTERVAL,
+    LIVE_STATUS_TTL,
     TELEMETRY_SCAN_INTERVAL,
 )
 
@@ -55,6 +56,11 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             session_token=entry.data[CONF_TOKEN],
         )
         self._overview: dict[str, Any] = {}
+        # Live gate-status pushed by a cover's follow after a press, keyed by the
+        # entity key (Wi-Fi serial or GSM key): (label, monotonic expiry). It
+        # takes precedence over the cloud poll while fresh so the cover *and*
+        # the operator-status sensor reflect movement in real time.
+        self._live_status: dict[str, tuple[str, float]] = {}
         self._last_telemetry = 0.0
         self._no_devices_notice = f"{DOMAIN}_no_devices_{entry.entry_id}"
         self._backup_diagnostic_done = False
@@ -64,6 +70,31 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._gsm_status: dict[str, Any] = {}
         self._gsm_diag: dict[str, Any] = {}
         self._last_gsm_diag = 0.0
+
+    def set_live_gate_status(self, key: str, label: str | None) -> None:
+        """Push a live gate-status label for an operator and refresh entities.
+
+        Called from a cover's follow loop while the gate is moving. This updates
+        every entity bound to the operator (cover + operator-status sensor)
+        without triggering a cloud re-poll.
+        """
+        if label is None:
+            return
+        self._live_status[key] = (label, time.monotonic() + LIVE_STATUS_TTL)
+        if self.data and key in self.data:
+            self.data[key]["live_status"] = label
+            self.async_update_listeners()
+
+    def _live_status_label(self, key: str) -> str | None:
+        """The live gate-status label for ``key`` if still within its TTL."""
+        entry = self._live_status.get(key)
+        if entry is None:
+            return None
+        label, expiry = entry
+        if time.monotonic() >= expiry:
+            del self._live_status[key]
+            return None
+        return label
 
     async def _async_update_data(self) -> dict[str, dict[str, Any]]:
         try:
@@ -90,6 +121,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 "device": d,
                 "status": statuses.get(d.serial_number),
                 "overview": self._overview.get(d.serial_number),
+                "live_status": self._live_status_label(d.serial_number),
             }
             for d in devices
             if d.serial_number
@@ -100,6 +132,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 "gsm_device": gsm,
                 "status": self._gsm_status.get(gsm.key),
                 "diag": self._gsm_diag.get(gsm.key),
+                "live_status": self._live_status_label(gsm.key),
             }
 
         has_devices = bool(data)

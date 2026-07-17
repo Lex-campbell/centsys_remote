@@ -31,11 +31,10 @@ from .const import DOMAIN
 from .coordinator import CentsysCoordinator
 from .entity import CentsysEntity, CentsysGsmEntity, async_setup_dynamic_entities
 
-# How long to follow the live MQTT status stream after a press (covers the
-# open + auto-close cycle) and how long a live frame stays authoritative before
-# we fall back to the HTTP poll.
+# How long to follow the live status stream after a press (covers the open +
+# auto-close cycle). Per-frame freshness/fallback is owned by the coordinator
+# (see LIVE_STATUS_TTL), which shares the live state with the status sensor too.
 LIVE_FOLLOW_SECONDS = 75.0
-LIVE_TTL_SECONDS = 20.0
 # How often to re-poll a GSM operator's live IO states during the follow window.
 GSM_LIVE_POLL_SECONDS = 3.0
 
@@ -66,10 +65,6 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
     def __init__(self, coordinator: CentsysCoordinator, serial: str) -> None:
         super().__init__(coordinator, serial)
         self._attr_unique_id = f"{serial}_gate"
-        # Live gate status from the MQTT deviceOverview stream (takes precedence
-        # over the slower HTTP poll while fresh).
-        self._live_status: str | None = None
-        self._live_expiry = 0.0
         self._following = False
 
     @property
@@ -77,15 +72,15 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
         data = self._device_data
         return data.get("status") if data else None
 
+    @property
     def _live(self) -> str | None:
-        """The most recent live gate status, if still within its TTL."""
-        if self._live_status and time.monotonic() < self._live_expiry:
-            return self._live_status
-        return None
+        """Live gate status shared via the coordinator, if still fresh."""
+        data = self._device_data
+        return data.get("live_status") if data else None
 
     @property
     def is_closed(self) -> bool | None:
-        live = self._live()
+        live = self._live
         if live is not None:
             return live == "closed"
         status = self._status
@@ -93,7 +88,7 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
 
     @property
     def is_opening(self) -> bool:
-        live = self._live()
+        live = self._live
         if live is not None:
             return live == "opening"
         status = self._status
@@ -101,19 +96,17 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
 
     @property
     def is_closing(self) -> bool:
-        live = self._live()
+        live = self._live
         if live is not None:
             return live == "closing"
         status = self._status
         return bool(status and status.is_closing)
 
     def _apply_live_overview(self, overview) -> None:
-        """Push a live deviceOverview frame onto the entity (event-loop side)."""
-        if overview is None or overview.gate_status is None:
+        """Push a live deviceOverview frame to the coordinator (event-loop side)."""
+        if overview is None:
             return
-        self._live_status = overview.gate_status
-        self._live_expiry = time.monotonic() + LIVE_TTL_SECONDS
-        self.async_write_ha_state()
+        self.coordinator.set_live_gate_status(self._serial, overview.gate_status)
 
     def _start_live_follow(self) -> None:
         """Follow the MQTT status stream for one open/close cycle."""
@@ -199,21 +192,18 @@ class CentsysGsmGateCover(CentsysGsmEntity, CoverEntity):
     def __init__(self, coordinator: CentsysCoordinator, key: str) -> None:
         super().__init__(coordinator, key)
         self._attr_unique_id = f"{key}_gate"
-        # Live gate position from the AppIOStatesEN poll (takes precedence over
-        # the slower coordinator poll while fresh). One of GSM_GATE_STATES.
-        self._live_status: str | None = None
-        self._live_expiry = 0.0
         self._polling = False
 
+    @property
     def _live(self) -> str | None:
-        if self._live_status and time.monotonic() < self._live_expiry:
-            return self._live_status
-        return None
+        """Live gate position shared via the coordinator, if still fresh."""
+        data = self._device_data
+        return data.get("live_status") if data else None
 
     @property
     def _gate_state(self) -> str | None:
         """Best current gate position ('open'/'closed'/...), or None if unknown."""
-        live = self._live()
+        live = self._live
         if live is not None:
             return live
         status = self._status
@@ -254,9 +244,9 @@ class CentsysGsmGateCover(CentsysGsmEntity, CoverEntity):
                         device.device_id
                     )
                     if status is not None and status.gate_state is not None:
-                        self._live_status = status.gate_state
-                        self._live_expiry = time.monotonic() + LIVE_TTL_SECONDS
-                        self.async_write_ha_state()
+                        self.coordinator.set_live_gate_status(
+                            self._key, status.gate_state
+                        )
                     await asyncio.sleep(GSM_LIVE_POLL_SECONDS)
             except Exception:  # noqa: BLE001 - live poll is best-effort
                 pass

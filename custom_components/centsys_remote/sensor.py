@@ -57,6 +57,15 @@ def _status_label(attr: str) -> Callable[[dict[str, Any]], Any]:
     return _inner
 
 
+def _operator_status(data: dict[str, Any]) -> Any:
+    """Operator position: the live follow value while fresh, else the poll."""
+    live = data.get("live_status")
+    if live:
+        return live
+    status = data.get("status")
+    return status.operator_status_label if status else None
+
+
 def _overview_attr(attr: str) -> Callable[[dict[str, Any]], Any]:
     """Return a field off the cached MQTT DeviceOverview (battery, temp, ...)."""
 
@@ -73,7 +82,7 @@ SENSORS: tuple[CentsysSensorDescription, ...] = (
         translation_key="operator_status",
         device_class=SensorDeviceClass.ENUM,
         options=["unknown", "open", "closed", "partly_open", "partly_closed", "opening", "closing"],
-        value_fn=_status_label("operator_status_label"),
+        value_fn=_operator_status,
     ),
     CentsysSensorDescription(
         key="theft_alarm_state",

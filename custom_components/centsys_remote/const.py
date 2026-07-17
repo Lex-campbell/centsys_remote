@@ -20,6 +20,10 @@ CONF_OTP_PLATFORM = "otp_platform"
 # Cloud polling cadence (seconds) for device list + operator status.
 DEFAULT_SCAN_INTERVAL = 60
 
+# How long a live gate-status frame (pushed by a cover's follow after a press)
+# stays authoritative before entities fall back to the slower cloud poll.
+LIVE_STATUS_TTL = 20
+
 # MQTT telemetry (battery voltage etc.) is far heavier than the HTTP poll: it
 # opens a TLS session and wakes the operator's Wi-Fi radio, so we refresh it on
 # a much slower cadence than the cloud status.
