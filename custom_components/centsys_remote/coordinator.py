@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     GSM_SCAN_INTERVAL,
+    LIVE_FOLLOW_SECONDS,
     LIVE_STATUS_TTL,
     TELEMETRY_SCAN_INTERVAL,
 )
@@ -61,6 +62,8 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         # takes precedence over the cloud poll while fresh so the cover *and*
         # the operator-status sensor reflect movement in real time.
         self._live_status: dict[str, tuple[str, float]] = {}
+        # Serials currently streaming deviceOverview after a TRG/PED press.
+        self._live_following: set[str] = set()
         self._last_telemetry = 0.0
         self._no_devices_notice = f"{DOMAIN}_no_devices_{entry.entry_id}"
         self._backup_diagnostic_done = False
@@ -84,6 +87,46 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         if self.data and key in self.data:
             self.data[key]["live_status"] = label
             self.async_update_listeners()
+
+    def start_live_follow(self, serial: str) -> None:
+        """Follow the MQTT status stream for one open/close cycle after a press.
+
+        Shared by the Wi-Fi cover and the pedestrian button so both update live
+        status through the same path. Concurrent follows for the same serial are
+        coalesced.
+        """
+        if serial in self._live_following:
+            return
+        data = (self.data or {}).get(serial) or {}
+        device = data.get("device")
+        mac = getattr(device, "mac_address", None)
+        self._live_following.add(serial)
+        loop = self.hass.loop
+
+        def _on_overview(overview) -> None:  # called from a worker thread
+            if overview is None:
+                return
+            loop.call_soon_threadsafe(
+                self.set_live_gate_status, serial, overview.gate_status
+            )
+
+        async def _runner() -> None:
+            try:
+                await self.client.follow_overview(
+                    serial,
+                    callback=_on_overview,
+                    duration=LIVE_FOLLOW_SECONDS,
+                    mac=mac,
+                )
+            except Exception:  # noqa: BLE001 - live follow is best-effort
+                pass
+            finally:
+                self._live_following.discard(serial)
+                await self.async_request_refresh()
+
+        self.hass.async_create_background_task(
+            _runner(), name=f"centsys_follow_{serial}"
+        )
 
     def _live_status_label(self, key: str) -> str | None:
         """The live gate-status label for ``key`` if still within its TTL."""

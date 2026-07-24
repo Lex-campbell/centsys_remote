@@ -14,8 +14,10 @@ import struct
 
 BASE_KEY = bytes.fromhex("38983fba4dbfab9c")
 
-# Trigger activation id: garage-door operators use RUN, others use TRG.
+# Trigger activation ids (cmd 03). Garage-door operators use RUN; sliding /
+# swing gates use TRG for a full open and PED for a pedestrian opening.
 ACTIVATION_TRG = 34
+ACTIVATION_PED = 35
 ACTIVATION_GDO_RUN = 1
 
 # Known garage-door ``productType`` values (fast path; the live telemetry shape

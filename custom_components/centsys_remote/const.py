@@ -24,6 +24,10 @@ DEFAULT_SCAN_INTERVAL = 60
 # stays authoritative before entities fall back to the slower cloud poll.
 LIVE_STATUS_TTL = 20
 
+# How long to follow the MQTT status stream after a TRG/PED press (covers the
+# open + auto-close cycle).
+LIVE_FOLLOW_SECONDS = 75.0
+
 # MQTT telemetry (battery voltage etc.) is far heavier than the HTTP poll: it
 # opens a TLS session and wakes the operator's Wi-Fi radio, so we refresh it on
 # a much slower cadence than the cloud status.

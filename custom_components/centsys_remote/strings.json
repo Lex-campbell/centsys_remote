@@ -109,6 +109,7 @@
       "gsm_sms_tokens": { "name": "SMS tokens remaining" }
     },
     "button": {
+      "pedestrian": { "name": "Pedestrian" },
       "gsm_refresh_airtime": { "name": "Refresh airtime" }
     }
   }

@@ -9,10 +9,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api.exceptions import CentsysError
+from .api.exceptions import CentsysCertExpiredError, CentsysError
+from .api.packets import ACTIVATION_PED, GDO_PRODUCT_TYPES
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
-from .entity import CentsysGsmEntity, CentsysGsmIoEntity, async_setup_dynamic_entities
+from .entity import (
+    CentsysEntity,
+    CentsysGsmEntity,
+    CentsysGsmIoEntity,
+    async_setup_dynamic_entities,
+)
 
 
 async def async_setup_entry(
@@ -24,6 +30,17 @@ async def async_setup_entry(
 
     def _factory(key: str):
         data = coordinator.data.get(key) or {}
+        if data.get("kind") == "wifi":
+            # Pedestrian opening is a SMART sliding/swing activation; garage-door
+            # operators use a different activation set and have no PED.
+            device = data.get("device")
+            overview = data.get("overview")
+            if (
+                getattr(device, "product_type", None) in GDO_PRODUCT_TYPES
+                or getattr(overview, "family", None) == "sdo5"
+            ):
+                return []
+            return [CentsysWifiPedestrianButton(coordinator, key)]
         if data.get("kind") != "gsm":
             return []
         entities: list[ButtonEntity] = [CentsysGsmAirtimeButton(coordinator, key)]
@@ -41,6 +58,48 @@ async def async_setup_entry(
         return entities
 
     async_setup_dynamic_entities(entry, coordinator, async_add_entities, _factory)
+
+
+class CentsysWifiPedestrianButton(CentsysEntity, ButtonEntity):
+    """Pedestrian (partial) open for a SMART Wi-Fi gate.
+
+    Same MQTT handshake as the cover's full open, but with the PED activation
+    id -- matching the Pedestrian button in the official app.
+    """
+
+    _attr_translation_key = "pedestrian"
+    _attr_icon = "mdi:walk"
+
+    def __init__(self, coordinator: CentsysCoordinator, serial: str) -> None:
+        super().__init__(coordinator, serial)
+        self._attr_unique_id = f"{serial}_pedestrian"
+
+    async def async_press(self) -> None:
+        data = self._device_data or {}
+        device = data.get("device")
+        mac = getattr(device, "mac_address", None)
+        if not mac:
+            raise HomeAssistantError(
+                "Gate has no MAC address in the cloud device list; cannot build "
+                "the trigger packet."
+            )
+        try:
+            ok = await self.coordinator.client.open_gate(
+                self._serial,
+                mac=mac,
+                product_type=getattr(device, "product_type", None),
+                activation_id=ACTIVATION_PED,
+            )
+        except CentsysCertExpiredError as err:
+            raise HomeAssistantError(str(err)) from err
+        except CentsysError as err:
+            raise HomeAssistantError(f"Failed to trigger pedestrian open: {err}") from err
+        if not ok:
+            raise HomeAssistantError(
+                "Gate did not acknowledge the pedestrian trigger (offline or busy?)."
+            )
+        await self.coordinator.async_request_refresh()
+        self.coordinator.start_live_follow(self._serial)
 
 
 class CentsysGsmAirtimeButton(CentsysGsmEntity, ButtonEntity):

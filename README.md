@@ -13,6 +13,7 @@ Control and monitor your Centurion gate operator directly from Home Assistant �
 - **Gate cover** — open / close from the dashboard, automations, voice assistants, etc.
 - **Live status** — the gate animates `opening → open → closing → closed` in real time while it moves, then settles to the steady status.
 - **Auxiliary outputs (GSM/ULTRA)** — extra operator IOs such as pedestrian, lock, garage or courtesy light appear as their own buttons (or switches for two-state outputs), mirroring the app's button list.
+- **Pedestrian open (SMART Wi-Fi)** — sliding/swing gates get a Pedestrian button for a partial opening, matching the app.
 - **Rich diagnostics** — battery voltage, mains/power supply status, safety-beam states, online/offline, fault and warranty flags, last-seen time, and Wi-Fi signal.
 - **Simple onboarding** — sign in with your phone number and a one-time PIN (delivered via WhatsApp or SMS), exactly like the app.
 
@@ -39,7 +40,7 @@ Older or non-Wi-Fi motors reached through a Centurion cellular module (e.g. **G-
 
 | Device | Connection | Status |
 | --- | --- | --- |
-| **Centurion D5 Evo SMART** | Wi-Fi | ✅ Fully tested — control + live status + diagnostics |
+| **Centurion D5 Evo SMART** | Wi-Fi | ✅ Fully tested — control + pedestrian open + live status + diagnostics |
 | **Centurion D6 SMART+** | Wi-Fi | ✅ Tested — control + live status + diagnostics |
 | **Centurion SD05 SMART+** (garage door) | Wi-Fi | ✅ Tested — control + live status |
 | **G-SPEAK 4G** module | GSM/cellular | ✅ Tested — gate + auxiliary IOs (pedestrian, lock) |
@@ -121,8 +122,13 @@ Each gate operator becomes one device. The main control is the **cover**; everyt
 | Entity | What it does |
 | --- | --- |
 | **Gate** (cover) | Open / close the gate. Centurion operators are single-button triggers, so both buttons pulse the gate and it decides direction from its current position — just like the physical remote. The control greys out to reflect the current state (open disabled when already open, etc.). |
+| **Pedestrian** (button) | On SMART Wi-Fi sliding/swing gates, a partial (pedestrian) opening — the same action as the Pedestrian button in the official app. |
 | **Auxiliary outputs** (buttons) | On GSM/ULTRA operators, each additional configured output (pedestrian, lock, garage, ...) becomes a button that sends its activation pulse. |
 | **Two-state outputs** (switches) | A latching output that reports on/off (e.g. a courtesy light) appears as a switch; toggling it sends the operator's activation. State shows once the operator reports it. |
+
+![Gate cover and Pedestrian button on a D5 Evo SMART](images/pedestrian-control.png)
+
+> **Pedestrian auto-close:** how far the gate opens and whether it auto-closes after a pedestrian trigger is configured on the operator (Centurion Pro / installer settings), not in this integration. On some installs auto-close is off by default for PED — check your motor's pedestrian settings in the Centurion Pro app if the behaviour isn't what you expect.
 
 ### Sensors
 

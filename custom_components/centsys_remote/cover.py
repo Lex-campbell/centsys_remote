@@ -2,7 +2,7 @@
 
 State comes from ``GetOperatorOverview`` (``operatorStatus``) for steady state,
 and from the live MQTT ``deviceOverview`` stream while the gate is moving (see
-``_start_live_follow``). The operator is a single-button trigger, so both open
+``CentsysCoordinator.start_live_follow``). The operator is a single-button trigger, so both open
 and close pulse the same MQTT trigger (the gate decides direction from its own
 state) -- exactly how the physical remote and the app's button behave.
 
@@ -31,11 +31,8 @@ from .const import DOMAIN
 from .coordinator import CentsysCoordinator
 from .entity import CentsysEntity, CentsysGsmEntity, async_setup_dynamic_entities
 
-# How long to follow the live status stream after a press (covers the open +
-# auto-close cycle). Per-frame freshness/fallback is owned by the coordinator
-# (see LIVE_STATUS_TTL), which shares the live state with the status sensor too.
+# How long / how often to re-poll a GSM operator's live IO states after a trigger.
 LIVE_FOLLOW_SECONDS = 75.0
-# How often to re-poll a GSM operator's live IO states during the follow window.
 GSM_LIVE_POLL_SECONDS = 3.0
 
 
@@ -65,7 +62,6 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
     def __init__(self, coordinator: CentsysCoordinator, serial: str) -> None:
         super().__init__(coordinator, serial)
         self._attr_unique_id = f"{serial}_gate"
-        self._following = False
 
     @property
     def _status(self):
@@ -102,42 +98,6 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
         status = self._status
         return bool(status and status.is_closing)
 
-    def _apply_live_overview(self, overview) -> None:
-        """Push a live deviceOverview frame to the coordinator (event-loop side)."""
-        if overview is None:
-            return
-        self.coordinator.set_live_gate_status(self._serial, overview.gate_status)
-
-    def _start_live_follow(self) -> None:
-        """Follow the MQTT status stream for one open/close cycle."""
-        if self._following:
-            return
-        self._following = True
-        loop = self.hass.loop
-
-        def _on_overview(overview) -> None:  # called from a worker thread
-            loop.call_soon_threadsafe(self._apply_live_overview, overview)
-
-        async def _runner() -> None:
-            try:
-                device = self._device_data["device"] if self._device_data else None
-                await self.coordinator.client.follow_overview(
-                    self._serial,
-                    callback=_on_overview,
-                    duration=LIVE_FOLLOW_SECONDS,
-                    mac=getattr(device, "mac_address", None),
-                )
-            except Exception:  # noqa: BLE001 - live follow is best-effort
-                pass
-            finally:
-                self._following = False
-                # Final reconcile against the authoritative cloud status.
-                await self.coordinator.async_request_refresh()
-
-        self.hass.async_create_background_task(
-            _runner(), name=f"centsys_follow_{self._serial}"
-        )
-
     async def _trigger(self) -> None:
         data = self._device_data or {}
         device = data.get("device")
@@ -165,7 +125,7 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
                 "Gate did not acknowledge the trigger (offline or busy?)."
             )
         await self.coordinator.async_request_refresh()
-        self._start_live_follow()
+        self.coordinator.start_live_follow(self._serial)
 
     async def async_open_cover(self, **kwargs) -> None:
         await self._trigger()
