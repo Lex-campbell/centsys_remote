@@ -58,10 +58,7 @@ def _status_label(attr: str) -> Callable[[dict[str, Any]], Any]:
 
 
 def _operator_status(data: dict[str, Any]) -> Any:
-    """Operator position: the live follow value while fresh, else the poll."""
-    live = data.get("live_status")
-    if live:
-        return live
+    """Operator position from the cloud poll (live is applied in native_value)."""
     status = data.get("status")
     return status.operator_status_label if status else None
 
@@ -283,6 +280,11 @@ class CentsysSensor(CentsysEntity, SensorEntity):
         data = self._device_data
         if not data:
             return None
+        # Prefer TTL-aware live status for operator_status (same source as cover).
+        if self.entity_description.key == "operator_status":
+            live = self.coordinator.live_gate_status(self._serial)
+            if live:
+                return live
         return self.entity_description.value_fn(data)
 
 

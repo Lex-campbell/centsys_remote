@@ -70,9 +70,8 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
 
     @property
     def _live(self) -> str | None:
-        """Live gate status shared via the coordinator, if still fresh."""
-        data = self._device_data
-        return data.get("live_status") if data else None
+        """Live gate status from the coordinator, if still within its TTL."""
+        return self.coordinator.live_gate_status(self._serial)
 
     @property
     def is_closed(self) -> bool | None:
@@ -156,9 +155,8 @@ class CentsysGsmGateCover(CentsysGsmEntity, CoverEntity):
 
     @property
     def _live(self) -> str | None:
-        """Live gate position shared via the coordinator, if still fresh."""
-        data = self._device_data
-        return data.get("live_status") if data else None
+        """Live gate position from the coordinator, if still within its TTL."""
+        return self.coordinator.live_gate_status(self._key)
 
     @property
     def _gate_state(self) -> str | None:
@@ -212,6 +210,7 @@ class CentsysGsmGateCover(CentsysGsmEntity, CoverEntity):
                 pass
             finally:
                 self._polling = False
+                self.coordinator.set_live_gate_status(self._key, None)
                 await self.coordinator.async_request_refresh()
 
         self.hass.async_create_background_task(

@@ -75,18 +75,20 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._last_gsm_diag = 0.0
 
     def set_live_gate_status(self, key: str, label: str | None) -> None:
-        """Push a live gate-status label for an operator and refresh entities.
+        """Push (or clear) a live gate-status label and refresh entities.
 
-        Called from a cover's follow loop while the gate is moving. This updates
-        every entity bound to the operator (cover + operator-status sensor)
-        without triggering a cloud re-poll.
+        Pass ``None`` to drop the live label so entities fall back to the poll.
+        Entities must read via :meth:`live_gate_status` (TTL-aware).
         """
         if label is None:
-            return
-        self._live_status[key] = (label, time.monotonic() + LIVE_STATUS_TTL)
-        if self.data and key in self.data:
-            self.data[key]["live_status"] = label
-            self.async_update_listeners()
+            self._live_status.pop(key, None)
+        else:
+            self._live_status[key] = (label, time.monotonic() + LIVE_STATUS_TTL)
+        self.async_update_listeners()
+
+    def live_gate_status(self, key: str) -> str | None:
+        """Live gate-status label for ``key`` if still within its TTL, else None."""
+        return self._live_status_label(key)
 
     def start_live_follow(self, serial: str) -> None:
         """Follow the MQTT status stream for one open/close cycle after a press.
@@ -122,6 +124,8 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 pass
             finally:
                 self._live_following.discard(serial)
+                # Drop live so the cloud poll is authoritative after the follow.
+                self.set_live_gate_status(serial, None)
                 await self.async_request_refresh()
 
         self.hass.async_create_background_task(
