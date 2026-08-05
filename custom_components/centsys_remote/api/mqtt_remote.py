@@ -20,8 +20,38 @@ import struct
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 _LOGGER = logging.getLogger(__name__)
+
+# Private CA; leaf is CN=CentsysQA with no IP SAN (we connect by Azure IP).
+MQTT_TLS_SERVER_NAME = "CentsysQA"
+_CENTSYS_CA_PEM = (Path(__file__).resolve().parent / "certs" / "centsys_ca.pem").read_text()
+
+
+def mqtt_ssl_context(*, certfile: str, keyfile: str) -> ssl.SSLContext:
+    """SSL context for Centsys MQTT: pinned CA + client cert (mTLS)."""
+    ctx = ssl.create_default_context(cadata=_CENTSYS_CA_PEM)
+    ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
+    return ctx
+
+
+def configure_mqtt_tls(client, *, certfile: str, keyfile: str) -> None:
+    """Apply pinned-CA mTLS. paho would use the IP as server_hostname; use leaf CN."""
+    ctx = mqtt_ssl_context(certfile=certfile, keyfile=keyfile)
+    client.tls_set_context(ctx)
+
+    def _ssl_wrap_socket(tcp_sock):
+        ssl_sock = ctx.wrap_socket(
+            tcp_sock,
+            server_hostname=MQTT_TLS_SERVER_NAME,
+            do_handshake_on_connect=False,
+        )
+        ssl_sock.settimeout(client._keepalive)
+        ssl_sock.do_handshake()
+        return ssl_sock
+
+    client._ssl_wrap_socket = _ssl_wrap_socket  # type: ignore[method-assign]
 
 
 # --- deviceOverview telemetry -------------------------------------------------
@@ -288,11 +318,7 @@ def open_gate_blocking(
         os.write(fd_k, key_pem)
         os.close(fd_k)
 
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        ctx.load_cert_chain(certfile=cert_file, keyfile=key_file)
-        client.tls_set_context(ctx)
+        configure_mqtt_tls(client, certfile=cert_file, keyfile=key_file)
 
         try:
             client.connect(host, port, keepalive=30, clean_start=True)
@@ -447,11 +473,7 @@ def follow_overview_blocking(
         os.write(fd_k, key_pem)
         os.close(fd_k)
 
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        ctx.load_cert_chain(certfile=cert_file, keyfile=key_file)
-        client.tls_set_context(ctx)
+        configure_mqtt_tls(client, certfile=cert_file, keyfile=key_file)
 
         client.connect(host, port, keepalive=30, clean_start=True)
         client.loop_start()
@@ -565,11 +587,7 @@ def fetch_overview_blocking(
         os.write(fd_k, key_pem)
         os.close(fd_k)
 
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        ctx.load_cert_chain(certfile=cert_file, keyfile=key_file)
-        client.tls_set_context(ctx)
+        configure_mqtt_tls(client, certfile=cert_file, keyfile=key_file)
 
         client.connect(host, port, keepalive=30, clean_start=True)
         client.loop_start()
