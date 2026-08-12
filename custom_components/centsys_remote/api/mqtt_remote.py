@@ -32,6 +32,10 @@ _CENTSYS_CA_PEM = (Path(__file__).resolve().parent / "certs" / "centsys_ca.pem")
 def mqtt_ssl_context(*, certfile: str, keyfile: str) -> ssl.SSLContext:
     """SSL context for Centsys MQTT: pinned CA + client cert (mTLS)."""
     ctx = ssl.create_default_context(cadata=_CENTSYS_CA_PEM)
+    # Centurion's certs omit Authority Key Identifier; VERIFY_X509_STRICT
+    # (default on HA's newer OpenSSL) rejects that. Chain + hostname still checked.
+    if hasattr(ssl, "VERIFY_X509_STRICT"):
+        ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT
     ctx.load_cert_chain(certfile=certfile, keyfile=keyfile)
     return ctx
 
