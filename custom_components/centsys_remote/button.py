@@ -10,7 +10,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api.exceptions import CentsysCertExpiredError, CentsysError
-from .api.packets import ACTIVATION_PED, GDO_PRODUCT_TYPES
+from .api.packets import ACTIVATION_PED
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
 from .entity import (
@@ -31,14 +31,12 @@ async def async_setup_entry(
     def _factory(key: str):
         data = coordinator.data.get(key) or {}
         if data.get("kind") == "wifi":
-            # Pedestrian opening is a SMART sliding/swing activation; garage-door
-            # operators use a different activation set and have no PED.
-            device = data.get("device")
+            # Pedestrian opening is a SMART sliding/swing action; garage-door
+            # operators have no pedestrian mode. Only a garage reports the
+            # "sdo5" telemetry family, so that is the signal -- productType is
+            # unreliable (the same type ships as either a gate or a garage).
             overview = data.get("overview")
-            if (
-                getattr(device, "product_type", None) in GDO_PRODUCT_TYPES
-                or getattr(overview, "family", None) == "sdo5"
-            ):
+            if getattr(overview, "family", None) == "sdo5":
                 return []
             return [CentsysWifiPedestrianButton(coordinator, key)]
         if data.get("kind") != "gsm":
@@ -87,7 +85,6 @@ class CentsysWifiPedestrianButton(CentsysEntity, ButtonEntity):
             ok = await self.coordinator.client.open_gate(
                 self._serial,
                 mac=mac,
-                product_type=getattr(device, "product_type", None),
                 activation_id=ACTIVATION_PED,
             )
         except CentsysCertExpiredError as err:

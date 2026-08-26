@@ -90,6 +90,21 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         """Live gate-status label for ``key`` if still within its TTL, else None."""
         return self._live_status_label(key)
 
+    def set_overview(self, serial: str, overview: Any) -> None:
+        """Cache an on-demand MQTT overview and surface it to entities.
+
+        Lets a cover that had no cached telemetry (cold start) store the
+        overview it just fetched, so the garage/gate family is known for later
+        presses and the pedestrian-button exposure without waiting for the slow
+        telemetry poll.
+        """
+        if overview is None:
+            return
+        self._overview[serial] = overview
+        if self.data and serial in self.data:
+            self.data[serial]["overview"] = overview
+        self.async_update_listeners()
+
     def start_live_follow(self, serial: str) -> None:
         """Follow the MQTT status stream for one open/close cycle after a press.
 
@@ -151,6 +166,15 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             if serials:
                 for status in await self.client.get_operator_overview(serials):
                     statuses[status.operator_serial_number] = status
+                    # Diagnostic aid for "theft alarm: Unknown": log the raw
+                    # value so an absent field (None) can be told apart from an
+                    # unmapped enum code for this operator model.
+                    _LOGGER.debug(
+                        "Operator %s: theftAlarmState=%r -> %s",
+                        status.operator_serial_number,
+                        status.theft_alarm_state,
+                        status.theft_alarm_state_label,
+                    )
         except CentsysAuthError as err:
             # Token rejected -> trigger reauth in the UI.
             raise UpdateFailed(f"Authentication failed: {err}") from err
@@ -404,3 +428,16 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 continue
             if overview is not None:
                 self._overview[serial] = overview
+                # Diagnostic aid for "battery voltage: Unknown" reports: log the
+                # decoded family and raw battery value so a genuine 0 (no
+                # battery) can be told apart from a value that failed to decode.
+                _LOGGER.debug(
+                    "Telemetry %s: family=%s battery_raw=%s (%.2fV) input_raw=%s "
+                    "power_raw=%s",
+                    serial,
+                    overview.family,
+                    overview.battery_voltage_raw,
+                    overview.battery_voltage or 0.0,
+                    overview.input_voltage_raw,
+                    overview.power_status_raw,
+                )

@@ -20,21 +20,20 @@ ACTIVATION_TRG = 34
 ACTIVATION_PED = 35
 ACTIVATION_GDO_RUN = 1
 
-# Known garage-door ``productType`` values (fast path; the live telemetry shape
-# is the authoritative signal, see ``is_garage``).
-GDO_PRODUCT_TYPES = frozenset({2, 50, 51})
-
 _ALGO_VERSION = 1
 _KEY_VERSION = 1
 
 
-def trigger_activation_id(
-    product_type: int | None = None, *, is_garage: bool = False
-) -> int:
-    """Return the activation id that opens an operator (RUN for garage, else TRG)."""
-    if is_garage or product_type in GDO_PRODUCT_TYPES:
-        return ACTIVATION_GDO_RUN
-    return ACTIVATION_TRG
+def trigger_activation_id(*, is_garage: bool = False) -> int:
+    """Return the activation id that opens an operator (RUN for garage, else TRG).
+
+    ``is_garage`` is derived strictly from the live telemetry family (``sdo5``),
+    never from ``productType``: the same product type can ship as either a garage
+    or a gate, and sending the garage RUN to a gate can trigger the operator's
+    Holiday Lockout. TRG is therefore the safe default for anything not positively
+    confirmed as a garage.
+    """
+    return ACTIVATION_GDO_RUN if is_garage else ACTIVATION_TRG
 
 
 def parse_mac(mac: str | bytes) -> bytes:
