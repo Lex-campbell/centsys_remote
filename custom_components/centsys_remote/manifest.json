@@ -7,6 +7,6 @@
   "integration_type": "hub",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/lex-campbell/centsys_remote/issues",
-  "requirements": ["paho-mqtt>=2.1", "cryptography>=42"],
-  "version": "0.4.7"
+  "requirements": ["paho-mqtt>=2.1"],
+  "version": "0.4.9"
 }

@@ -9,9 +9,10 @@ import time
 from datetime import timedelta
 from typing import Any
 
-from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -27,10 +28,26 @@ from .const import (
     GSM_SCAN_INTERVAL,
     LIVE_FOLLOW_SECONDS,
     LIVE_STATUS_TTL,
+    NO_GATES_HELP_URL,
     TELEMETRY_SCAN_INTERVAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _shape(value: Any) -> str:
+    """Describe a response by structure, so diagnostics can be shared safely.
+
+    A short string is one of the gateway's own status messages, so it is kept.
+    """
+    if isinstance(value, dict):
+        return f"dict with keys {sorted(value)}"
+    if isinstance(value, list):
+        keys = sorted({k for v in value if isinstance(v, dict) for k in v})
+        return f"list of {len(value)} entries, keys {keys}"
+    if isinstance(value, str):
+        return repr(value) if len(value) <= 80 else f"string, {len(value)} chars"
+    return type(value).__name__
 
 
 class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -64,8 +81,13 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._live_status: dict[str, tuple[str, float]] = {}
         # Serials currently streaming deviceOverview after a TRG/PED press.
         self._live_following: set[str] = set()
-        self._last_telemetry = 0.0
-        self._no_devices_notice = f"{DOMAIN}_no_devices_{entry.entry_id}"
+        # -inf, not 0: monotonic() is time since boot, so a zero start would
+        # skip the first fetch when HA starts within a poll interval of boot.
+        self._last_telemetry = float("-inf")
+        # Retry cadence for telemetry, widened on each empty cycle (see
+        # _maybe_refresh_telemetry).
+        self._telemetry_interval = float(DEFAULT_SCAN_INTERVAL)
+        self._no_devices_issue = f"no_devices_{entry.entry_id}"
         self._backup_diagnostic_done = False
         self._gsm_devices: list[Any] = []
         self._gsm_loaded = False
@@ -73,6 +95,25 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._gsm_status: dict[str, Any] = {}
         self._gsm_diag: dict[str, Any] = {}
         self._last_gsm_diag = 0.0
+        self._tasks: set[asyncio.Task] = set()
+
+    def async_spawn(self, coro, *, name: str) -> None:
+        """Start a best-effort background job owned by this config entry.
+
+        Live follows and airtime polls run for over a minute, so they are
+        tracked and cancelled by :meth:`async_shutdown` rather than left talking
+        to the backend after the entry has been unloaded or reloaded.
+        """
+        task = self.hass.async_create_background_task(coro, name=name)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def async_shutdown(self) -> None:
+        """Cancel in-flight background jobs, then stop polling."""
+        for task in list(self._tasks):
+            task.cancel()
+        self._tasks.clear()
+        await super().async_shutdown()
 
     def set_live_gate_status(self, key: str, label: str | None) -> None:
         """Push (or clear) a live gate-status label and refresh entities.
@@ -143,9 +184,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 self.set_live_gate_status(serial, None)
                 await self.async_request_refresh()
 
-        self.hass.async_create_background_task(
-            _runner(), name=f"centsys_follow_{serial}"
-        )
+        self.async_spawn(_runner(), name=f"centsys_follow_{serial}")
 
     def _live_status_label(self, key: str) -> str | None:
         """The live gate-status label for ``key`` if still within its TTL."""
@@ -176,8 +215,8 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                         status.theft_alarm_state_label,
                     )
         except CentsysAuthError as err:
-            # Token rejected -> trigger reauth in the UI.
-            raise UpdateFailed(f"Authentication failed: {err}") from err
+            # Token rejected -> prompt the user to sign in again.
+            raise ConfigEntryAuthFailed(str(err)) from err
         except CentsysError as err:
             raise UpdateFailed(str(err)) from err
 
@@ -209,35 +248,32 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         has_devices = bool(data)
         if not has_devices:
             await self._log_backup_diagnostic()
-        self._update_no_devices_notice(has_devices)
+        self._update_no_devices_issue(has_devices)
 
         return data
 
-    def dismiss_no_devices_notice(self) -> None:
-        """Clear the 'no gates linked' notification (e.g. on unload)."""
-        persistent_notification.async_dismiss(self.hass, self._no_devices_notice)
+    def dismiss_no_devices_issue(self) -> None:
+        """Clear the 'no gates linked' repair issue (e.g. on unload)."""
+        ir.async_delete_issue(self.hass, DOMAIN, self._no_devices_issue)
 
-    def _update_no_devices_notice(self, has_devices: bool) -> None:
-        """Show/clear a notification explaining an account with no linked gates.
+    def _update_no_devices_issue(self, has_devices: bool) -> None:
+        """Raise or clear the repair explaining an account with no linked gates.
 
-        New gates are picked up automatically on the next poll, so this simply
-        tells the user what to do and then clears itself once a gate appears.
+        This is a standing configuration problem the user has to fix in the
+        official app, not a one-off alert, so it belongs in Repairs. New gates
+        are picked up on the next poll and the issue clears itself.
         """
         if has_devices:
-            persistent_notification.async_dismiss(self.hass, self._no_devices_notice)
+            ir.async_delete_issue(self.hass, DOMAIN, self._no_devices_issue)
             return
-        persistent_notification.async_create(
+        ir.async_create_issue(
             self.hass,
-            (
-                "You're signed in, but no gates are linked to this number yet.\n\n"
-                "Open the **MyCentsys Remote** app and make sure your gate appears "
-                "there for this phone number - the gate's admin needs to add your "
-                "number as a **remote user** (a direct/Bluetooth-only connection "
-                "isn't enough). Once it's linked, it will appear here automatically "
-                "within a minute; no restart needed."
-            ),
-            title="CenSys Gate Remote: no gates linked",
-            notification_id=self._no_devices_notice,
+            DOMAIN,
+            self._no_devices_issue,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="no_gates_linked",
+            learn_more_url=NO_GATES_HELP_URL,
         )
 
     async def _log_backup_diagnostic(self) -> None:
@@ -268,15 +304,15 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 "No Wi-Fi gates for this number, but the legacy GWeb gateway "
                 "returned %s configured button(s) - this looks like a GSM/ULTRA "
                 "or non-Wi-Fi device, which this integration does not control "
-                "yet. Details logged at debug level.",
+                "yet. Field names logged at debug level.",
                 len(buttons),
             )
-            _LOGGER.debug("Legacy GWeb device config for this number: %s", buttons)
+            _LOGGER.debug("Legacy GWeb device config: %s", _shape(buttons))
         else:
             _LOGGER.info(
                 "Legacy GWeb gateway returned no configured devices for this "
-                "number either (response: %r).",
-                buttons,
+                "number either (response: %s).",
+                _shape(buttons),
             )
 
     async def _log_gweb_backup(self) -> None:
@@ -305,11 +341,10 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         count = len(operators) if isinstance(operators, list) else "unknown"
         _LOGGER.info(
-            "A cloud backup exists for this number (operators in backup: %s). "
-            "Full backup logged at debug level.",
+            "A cloud backup exists for this number (operators in backup: %s).",
             count,
         )
-        _LOGGER.debug("GWeb app backup for this number: %s", backup)
+        _LOGGER.debug("GWeb app backup: %s", _shape(backup))
 
     async def _maybe_refresh_gsm(self) -> None:
         """Refresh the legacy GSM/ULTRA device list, best-effort.
@@ -378,7 +413,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         The balance answer lands a little after it is queued, so refresh in the
         background until the tokens appear (or attempts run out).
         """
-        self.hass.async_create_background_task(
+        self.async_spawn(
             self._poll_airtime(key, device_id), name=f"{DOMAIN}_airtime_{key}"
         )
 
@@ -403,15 +438,19 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
     async def _maybe_refresh_telemetry(self, devices: list[Any]) -> None:
         """Refresh cached MQTT telemetry for Wi-Fi operators, best-effort.
 
-        Rate-limited to ``TELEMETRY_SCAN_INTERVAL``. Each fetch wakes the gate
-        and waits for a status broadcast, so failures are expected (asleep /
-        offline) and are swallowed, keeping the last known values.
+        Each fetch opens a TLS session and wakes the operator's radio, so it is
+        rate-limited to ``TELEMETRY_SCAN_INTERVAL`` once values are flowing.
+        Before that it retries at the poll interval so a fresh install fills in
+        quickly, doubling the wait after every cycle that yields nothing -- an
+        operator that is asleep, offline or has no MAC would otherwise be woken
+        every poll, forever. Failures are expected and keep the cached values.
         """
         now = time.monotonic()
-        if self._overview and (now - self._last_telemetry) < TELEMETRY_SCAN_INTERVAL:
+        if (now - self._last_telemetry) < self._telemetry_interval:
             return
         self._last_telemetry = now
 
+        got_any = False
         for device in devices:
             serial = device.serial_number
             if not serial or not getattr(device, "is_wifi_device", False):
@@ -427,6 +466,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 _LOGGER.debug("Telemetry error for %s: %s", serial, err)
                 continue
             if overview is not None:
+                got_any = True
                 self._overview[serial] = overview
                 # Diagnostic aid for "battery voltage: Unknown" reports: log the
                 # decoded family and raw battery value so a genuine 0 (no
@@ -441,3 +481,9 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                     overview.input_voltage_raw,
                     overview.power_status_raw,
                 )
+
+        self._telemetry_interval = (
+            float(TELEMETRY_SCAN_INTERVAL)
+            if got_any
+            else min(self._telemetry_interval * 2, float(TELEMETRY_SCAN_INTERVAL))
+        )

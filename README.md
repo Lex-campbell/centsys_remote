@@ -53,7 +53,7 @@ Using something not listed here? It will very likely still work — please let u
 
 ## Requirements
 
-- **Home Assistant 2024.1 or newer.**
+- **Home Assistant 2024.4 or newer.**
 - A **Centurion gate operator** (SMART Wi-Fi or GSM/ULTRA — see [Supported devices](#supported-devices)) already set up and working in the official **CenSys / MyCentsys Remote** app.
 - The **phone number** registered to that operator in the app (you'll receive a one-time PIN during setup).
 - Home Assistant must have **outbound internet access** (the integration talks to Centurion's cloud).
@@ -202,6 +202,8 @@ logger:
 ```
 
 You can then watch the logs live under **Settings → System → Logs** (use **Load full logs**), or download them to attach to a bug report.
+
+> **Safe to share.** The integration never writes credentials to the log — each call is recorded as its name, the address and a size, so no tokens, certificates or phone numbers go to disk. Debug logs are safe to attach to an issue, though it's worth a quick skim first, since Home Assistant's other components log independently of this one.
 
 To turn debug logging back off, remove those lines and restart, or run the **Logger: Set level** action with level `info`.
 

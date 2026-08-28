@@ -46,3 +46,8 @@ AIRTIME_POLL_ATTEMPTS = 12
 PLATFORMS = ["binary_sensor", "button", "cover", "sensor", "switch"]
 
 MANUFACTURER = "Centurion Systems (CenSys)"
+
+# Linked from the "no gates linked" repair, which the user resolves in the app.
+NO_GATES_HELP_URL = (
+    "https://github.com/lex-campbell/centsys_remote#requirements"
+)

@@ -18,8 +18,6 @@ Notes:
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
 import json
 import logging
 import re
@@ -34,6 +32,7 @@ from . import const
 from .exceptions import (
     CentsysApiError,
     CentsysAuthError,
+    CentsysCertExpiredError,
     CentsysError,
     OtpInvalidError,
 )
@@ -97,49 +96,14 @@ def to_international_number(number: str, dial_code: int) -> str:
     return cc + _remove_national_trunk_prefix(trimmed, cc)
 
 
-# Each token's exp is ~30 years past its creation time.
-TOKEN_TTL_SECONDS = 30 * 365 * 24 * 3600
+# How long a fetched MQTT client certificate is reused before being refetched.
+# Well inside the certificate's own validity; a broker rejection clears it early.
+CERT_CACHE_SECONDS = 6 * 3600
 
 
-def _b64url_nopad(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
-
-
-def mint_bootstrap_token(
-    mobile_number: str, secret: str, *, ttl_seconds: int = TOKEN_TTL_SECONDS
-) -> str:
-    """Mint an HS256 bearer for SendOtp/ValidateOtp from a known signing secret.
-
-    Token shape:
-        header  = {"alg":"HS256","typ":"JWT"}
-        payload = {<mobilephone claim>: number, "exp": now+~30y,
-                   "iss":"GateWayApi.com", "aud":"GateWayApi.com"}
-
-    Optional: only used when a ``bootstrap_secret`` is supplied to the client.
-    The default OTP login does not need this.
-    """
-    header = {"alg": "HS256", "typ": "JWT"}
-    payload = {
-        const.JWT_MOBILE_CLAIM: mobile_number,
-        "exp": int(time.time()) + ttl_seconds,
-        "iss": const.JWT_ISS,
-        "aud": const.JWT_AUD,
-    }
-    signing_input = (
-        f"{_b64url_nopad(json.dumps(header, separators=(',', ':')).encode())}."
-        f"{_b64url_nopad(json.dumps(payload, separators=(',', ':')).encode())}"
-    )
-    signature = hmac.new(secret.encode(), signing_input.encode(), hashlib.sha256).digest()
-    return f"{signing_input}.{_b64url_nopad(signature)}"
-
-
-def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
-    """Copy headers with the bearer token shortened, for safe logging."""
-    redacted = dict(headers)
-    auth = redacted.get("Authorization")
-    if auth and len(auth) > 24:
-        redacted["Authorization"] = f"{auth[:18]}...{auth[-6:]} (len={len(auth)})"
-    return redacted
+def _log_url(url: str | URL) -> str:
+    """Drop the query string; it can carry tokens and phone numbers."""
+    return str(url).split("?", 1)[0]
 
 
 class CentsysRemoteClient:
@@ -152,30 +116,25 @@ class CentsysRemoteClient:
         session: aiohttp.ClientSession,
         device_info: DeviceInfo | None = None,
         session_token: str | None = None,
-        bootstrap_token: str | None = None,
-        bootstrap_secret: str | None = None,
-        verify_ssl: bool = True,
     ) -> None:
         """
         :param mobile_number: E.164 number, e.g. "+27821234567".
         :param session: an aiohttp ClientSession (caller owns its lifecycle).
         :param device_info: client identity sent to the backend.
         :param session_token: an existing long-lived JWT to reuse (skips OTP login).
-        :param bootstrap_token: explicit bearer to use for SendOtp/ValidateOtp.
-        :param bootstrap_secret: optional HS256 secret; if set (and no token is
-            available) a fresh bearer is minted locally for the OTP calls.
-        :param verify_ssl: set False only for debugging behind a proxy.
         """
         self.mobile_number = normalize_msisdn(mobile_number)
         self._session = session
         self.device_info = device_info or DeviceInfo()
         self._session_token = session_token
-        self._bootstrap_token = bootstrap_token
-        self._bootstrap_secret = bootstrap_secret
-        self._verify_ssl = verify_ssl
 
         # GWeb session token ("<hex>|<base64>"), derived after login.
         self._gweb_token: str | None = None
+
+        # Cached MQTT client certificate, as PEM (see _mqtt_session).
+        self._cert_pem: bytes | None = None
+        self._key_pem: bytes | None = None
+        self._cert_expires = 0.0
 
     # -- properties --------------------------------------------------------
 
@@ -193,7 +152,7 @@ class CentsysRemoteClient:
     async def _request(
         self,
         method: str,
-        url: str,
+        url: str | URL,
         *,
         op: str,
         bearer: str | None = None,
@@ -206,8 +165,10 @@ class CentsysRemoteClient:
         """Perform a request and return (status, text).
 
         Raises CentsysApiError on an unexpected status (with status/body/headers)
-        and CentsysError on a transport/TLS failure. Logs full request/response
-        detail at DEBUG, and a concise failure line at WARNING.
+        and CentsysError on a transport/TLS failure.
+
+        Requests and responses are logged as ``op`` plus a size only: bodies,
+        headers and query strings here can all carry credentials.
 
         :param op: human-readable operation name, used in logs and errors.
         """
@@ -221,10 +182,7 @@ class CentsysRemoteClient:
         if content_type:
             headers["Content-Type"] = content_type
 
-        _LOGGER.debug(
-            "[%s] -> %s %s\n  req headers: %s\n  json: %s\n  data: %s",
-            op, method, url, _redact_headers(headers), json_body, data,
-        )
+        _LOGGER.debug("[%s] -> %s %s", op, method, _log_url(url))
         try:
             async with self._session.request(
                 method,
@@ -232,7 +190,6 @@ class CentsysRemoteClient:
                 headers=headers,
                 json=json_body,
                 data=data,
-                ssl=self._verify_ssl,
             ) as resp:
                 text = await resp.text()
                 resp_headers = {k: v for k, v in resp.headers.items()}
@@ -244,16 +201,14 @@ class CentsysRemoteClient:
             _LOGGER.warning("[%s] unexpected error: %r", op, err)
             raise CentsysError(f"{op}: {err!r}") from err
 
-        _LOGGER.debug(
-            "[%s] <- HTTP %s\n  resp headers: %s\n  body: %s",
-            op, status, resp_headers, text,
-        )
+        _LOGGER.debug("[%s] <- HTTP %s, %d bytes", op, status, len(text))
 
         if status not in expected_status:
-            _LOGGER.warning(
-                "[%s] failed: HTTP %s | body=%r | resp headers=%s",
-                op, status, text, resp_headers,
-            )
+            _LOGGER.warning("[%s] failed: HTTP %s, %d bytes", op, status, len(text))
+            if status in (401, 403):
+                # Distinct from a generic API error so the coordinator can start
+                # the reauth flow rather than just marking entities unavailable.
+                raise CentsysAuthError(f"{op}: rejected (HTTP {status})")
             raise CentsysApiError(
                 f"{op} failed", status=status, body=text, headers=resp_headers
             )
@@ -271,23 +226,15 @@ class CentsysRemoteClient:
             raise CentsysAuthError("No session token; call login_with_otp() first.")
         return self._session_token
 
-    def _otp_bearer(self) -> str | None:
+    def _otp_bearer(self) -> str:
         """Bearer to use for SendOtp/ValidateOtp.
 
         The backend rejects unauthenticated SendOtp with 401, so a service-level
         bearer is presented before any user token exists. This is what makes a
-        from-scratch OTP login work.
-
-        Priority: explicit bootstrap_token > existing session_token >
-        locally-minted token (if a secret was supplied) > built-in service JWT.
+        from-scratch OTP login work; an existing session is preferred when
+        re-authenticating.
         """
-        if self._bootstrap_token:
-            return self._bootstrap_token
-        if self._session_token:
-            return self._session_token
-        if self._bootstrap_secret:
-            return mint_bootstrap_token(self.mobile_number, self._bootstrap_secret)
-        return const.GATEWAY_API_SERVICE_LEVEL_JWT
+        return self._session_token or const.GATEWAY_API_SERVICE_LEVEL_JWT
 
     # -- authentication ----------------------------------------------------
 
@@ -318,7 +265,9 @@ class CentsysRemoteClient:
             json_body=body,
             content_type="application/json",
         )
-        return self._parse_json(text) is True
+        sent = self._parse_json(text) is True
+        _LOGGER.debug("[SendOtp] sent=%s (platform %s)", sent, otp_platform)
+        return sent
 
     async def validate_otp(self, otp: str) -> str:
         """Validate an OTP code and store the returned session JWT.
@@ -341,6 +290,7 @@ class CentsysRemoteClient:
         token = data.get("response") if isinstance(data, dict) else None
         if not token:
             raise OtpInvalidError("OTP rejected (empty response token).")
+        _LOGGER.debug("[ValidateOtp] accepted")
         self._session_token = token
         return token
 
@@ -378,7 +328,9 @@ class CentsysRemoteClient:
         )
         blob = self._parse_json(text)
         if not isinstance(blob, str) or not blob:
-            raise CentsysApiError(f"GetGwebToken returned unexpected body: {text}")
+            raise CentsysApiError(
+                f"GetGwebToken returned unexpected body ({len(text)} bytes)"
+            )
 
         # Step 2: exchange the blob for a GWeb session token.
         # Auth header = base64("<APP_NAME>|<number>|<device_string>:<blob>")
@@ -401,7 +353,9 @@ class CentsysRemoteClient:
         )
         encoded = self._parse_json(text)
         if not isinstance(encoded, str) or not encoded:
-            raise CentsysApiError(f"MCROTPNumb returned unexpected body: {text}")
+            raise CentsysApiError(
+                f"MCROTPNumb returned unexpected body ({len(text)} bytes)"
+            )
         # The response is base64; the real token ("<hex>|<base64>") is its decode.
         try:
             gweb_token = base64.b64decode(encoded.strip('"')).decode("utf-8")
@@ -411,6 +365,10 @@ class CentsysRemoteClient:
             ) from err
         self._gweb_token = gweb_token
         return gweb_token
+
+    async def _require_gweb_token(self) -> str:
+        """Return the GWeb session token, deriving it on first use."""
+        return self._gweb_token or await self.fetch_gweb_token()
 
     # -- discovery ---------------------------------------------------------
 
@@ -430,7 +388,9 @@ class CentsysRemoteClient:
         )
         data = self._parse_json(text)
         if not isinstance(data, list):
+            _LOGGER.debug("[GetDevices] no operator list returned")
             return []
+        _LOGGER.debug("[GetDevices] %d operator(s)", len(data))
         return [Device.from_json(d) for d in data]
 
     async def get_operator_overview(self, serial_numbers: list[str]) -> list[OperatorStatus]:
@@ -460,13 +420,11 @@ class CentsysRemoteClient:
         ``DeviceConfigs``) for accounts with devices, or a message string such
         as "No Buttons for this number".
         """
-        if not self._gweb_token:
-            await self.fetch_gweb_token()
-        assert self._gweb_token is not None
+        token = await self._require_gweb_token()
 
         parts = [
             base64.b64encode(b"-1").decode(),
-            base64.b64encode(self._gweb_token.encode()).decode(),
+            base64.b64encode(token.encode()).decode(),
             base64.b64encode(self.device_info.onesignal_player_id.encode()).decode(),
             base64.b64encode(b"production").decode(),
         ]
@@ -521,15 +479,13 @@ class CentsysRemoteClient:
         the gateway's status message on success ("Activation Queued
         Successfully") and raises on a known failure state.
         """
-        if not self._gweb_token:
-            await self.fetch_gweb_token()
-        assert self._gweb_token is not None
+        token = await self._require_gweb_token()
 
         # data = base64(deviceId) | base64(token) | base64(ioNumber), placed raw
         # in the query string (the gateway decodes each base64 part itself).
         parts = "|".join(
             base64.b64encode(str(v).encode()).decode()
-            for v in (device_id, self._gweb_token, io_number)
+            for v in (device_id, token, io_number)
         )
         # encoded=True: send the base64 exactly as the app does, without letting
         # the HTTP layer percent-encode the '+', '/' and '=' characters.
@@ -595,13 +551,11 @@ class CentsysRemoteClient:
 
         Reads last-known values only. Returns ``None`` on an unparseable body.
         """
-        if not self._gweb_token:
-            await self.fetch_gweb_token()
-        assert self._gweb_token is not None
+        token = await self._require_gweb_token()
 
         parts = "|".join(
             base64.b64encode(str(v).encode()).decode()
-            for v in (device_id, self._gweb_token, "1")
+            for v in (device_id, token, "1")
         )
         url = URL(f"{const.GWEB_BASE}{const.EP_GWEB_STATUS}?data={parts}", encoded=True)
         _, text = await self._request("GET", url, op="MCRStatus", accept="*/*")
@@ -624,12 +578,10 @@ class CentsysRemoteClient:
         action), so this is on-demand only; the result is read back later via
         :meth:`get_gsm_status`. Returns the gateway's status message.
         """
-        if not self._gweb_token:
-            await self.fetch_gweb_token()
-        assert self._gweb_token is not None
+        token = await self._require_gweb_token()
         parts = "|".join(
             base64.b64encode(str(v).encode()).decode()
-            for v in (device_id, self._gweb_token, "3")
+            for v in (device_id, token, "3")
         )
         url = URL(f"{const.GWEB_BASE}{const.EP_GWEB_STATUS}?data={parts}", encoded=True)
         _, text = await self._request("GET", url, op="MCRStatus(airtime)", accept="*/*")
@@ -690,7 +642,9 @@ class CentsysRemoteClient:
         )
         data = self._parse_json(text)
         if not isinstance(data, dict):
-            raise CentsysApiError(f"GetCertificate returned unexpected body: {text}")
+            raise CentsysApiError(
+                f"GetCertificate returned unexpected body ({len(text)} bytes)"
+            )
 
         # Be tolerant of camelCase / PascalCase key variants.
         def _pick(*names: str) -> str | None:
@@ -703,8 +657,51 @@ class CentsysRemoteClient:
         pfx = _pick("certificatePfxBase64", "CertificatePfxBase64", "pfxBase64")
         password = _pick("certificatePassword", "CertificatePassword", "password")
         if not pfx:
-            raise CentsysApiError(f"GetCertificate: no pfx in body: {text}")
+            raise CentsysApiError(
+                f"GetCertificate: no pfx in body (keys: {sorted(data)})"
+            )
         return {"pfx_base64": pfx, "password": password or ""}
+
+    async def _mqtt_session(self, *, au: bool) -> tuple[bytes, bytes, str, str]:
+        """Return ``(cert_pem, key_pem, client_id, host)`` for a broker session.
+
+        The certificate is fetched once and reused: without this a single gate
+        press costs two ``GetCertificate`` round trips (the trigger and the live
+        status follow), plus a PKCS#12 parse each time. ``invalidate_certificate``
+        clears it when the broker rejects the credential.
+        """
+        import asyncio
+
+        from . import mqtt_remote
+
+        if self._cert_pem is None or time.monotonic() >= self._cert_expires:
+            cert = await self.get_certificate()
+            self._cert_pem, self._key_pem = await asyncio.get_running_loop().run_in_executor(
+                None, mqtt_remote.pfx_to_pem, cert["pfx_base64"], cert["password"]
+            )
+            self._cert_expires = time.monotonic() + CERT_CACHE_SECONDS
+
+        return (
+            self._cert_pem,
+            self._key_pem,
+            f"{const.MQTT_CLIENT_ID_PREFIX}{self.mobile_number}",
+            const.MQTT_IP_AU if au else const.MQTT_IP_ZA,
+        )
+
+    def invalidate_certificate(self) -> None:
+        """Drop the cached certificate so the next session fetches a fresh one."""
+        self._cert_pem = self._key_pem = None
+        self._cert_expires = 0.0
+
+    async def _run_mqtt(self, fn):
+        """Run a blocking MQTT call in a thread, refreshing a rejected cert."""
+        import asyncio
+
+        try:
+            return await asyncio.get_running_loop().run_in_executor(None, fn)
+        except CentsysCertExpiredError:
+            self.invalidate_certificate()
+            raise
 
     # -- gate control ------------------------------------------------------
 
@@ -732,8 +729,6 @@ class CentsysRemoteClient:
 
         Runs the blocking MQTT handshake in a thread so it is safe to await.
         """
-        import asyncio
-
         from . import mqtt_remote, packets
 
         mac4 = packets.parse_mac(mac)
@@ -742,16 +737,9 @@ class CentsysRemoteClient:
         if activation_id is None:
             activation_id = packets.trigger_activation_id(is_garage=is_garage)
 
-        cert = await self.get_certificate()
-        cert_pem, key_pem = await asyncio.get_running_loop().run_in_executor(
-            None, mqtt_remote.pfx_to_pem, cert["pfx_base64"], cert["password"]
-        )
+        cert_pem, key_pem, client_id, host = await self._mqtt_session(au=au)
 
-        client_id = f"{const.MQTT_CLIENT_ID_PREFIX}{self.mobile_number}"
-        host = const.MQTT_IP_AU if au else const.MQTT_IP_ZA
-
-        return await asyncio.get_running_loop().run_in_executor(
-            None,
+        return await self._run_mqtt(
             lambda: mqtt_remote.open_gate_blocking(
                 host=host,
                 port=const.MQTT_PORT,
@@ -803,22 +791,12 @@ class CentsysRemoteClient:
         ``serial`` must be the LONG operator serial (the MQTT topic prefix).
         Runs the blocking MQTT exchange in a thread so it is safe to await.
         """
-        import asyncio
-
         from . import mqtt_remote
 
         wake_cmd01 = self._wake_packet(mac)
+        cert_pem, key_pem, client_id, host = await self._mqtt_session(au=au)
 
-        cert = await self.get_certificate()
-        cert_pem, key_pem = await asyncio.get_running_loop().run_in_executor(
-            None, mqtt_remote.pfx_to_pem, cert["pfx_base64"], cert["password"]
-        )
-
-        client_id = f"{const.MQTT_CLIENT_ID_PREFIX}{self.mobile_number}"
-        host = const.MQTT_IP_AU if au else const.MQTT_IP_ZA
-
-        return await asyncio.get_running_loop().run_in_executor(
-            None,
+        return await self._run_mqtt(
             lambda: mqtt_remote.fetch_overview_blocking(
                 host=host,
                 port=const.MQTT_PORT,
@@ -849,22 +827,12 @@ class CentsysRemoteClient:
         ``serial`` must be the LONG operator serial (the MQTT topic prefix).
         ``mac`` builds the telemetry wake packet (see :meth:`get_overview`).
         """
-        import asyncio
-
         from . import mqtt_remote
 
         wake_cmd01 = self._wake_packet(mac)
+        cert_pem, key_pem, client_id, host = await self._mqtt_session(au=au)
 
-        cert = await self.get_certificate()
-        cert_pem, key_pem = await asyncio.get_running_loop().run_in_executor(
-            None, mqtt_remote.pfx_to_pem, cert["pfx_base64"], cert["password"]
-        )
-
-        client_id = f"{const.MQTT_CLIENT_ID_PREFIX}{self.mobile_number}"
-        host = const.MQTT_IP_AU if au else const.MQTT_IP_ZA
-
-        await asyncio.get_running_loop().run_in_executor(
-            None,
+        await self._run_mqtt(
             lambda: mqtt_remote.follow_overview_blocking(
                 host=host,
                 port=const.MQTT_PORT,

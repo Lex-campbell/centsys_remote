@@ -69,7 +69,3 @@ USER_AGENT = "MyCentsysRemoteMaui/2.1.0.35 CFNetwork/3860.600.12 Darwin/25.5.0"
 # OtpPlatform=1. Language is an ISO 639-2/T 3-letter code.
 OTP_PLATFORM = 1
 DEFAULT_LANGUAGE = "eng"
-
-JWT_ISS = "GateWayApi.com"
-JWT_AUD = "GateWayApi.com"
-JWT_MOBILE_CLAIM = "http://schemas.xmlsoap.org/ws/2005/05/identity/claims/mobilephone"

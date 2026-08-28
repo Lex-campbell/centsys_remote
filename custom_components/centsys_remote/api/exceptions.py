@@ -28,7 +28,11 @@ class OtpInvalidError(CentsysAuthError):
 
 
 class CentsysApiError(CentsysError):
-    """An API call returned a non-success HTTP status."""
+    """An API call returned a non-success HTTP status.
+
+    ``body`` is available to callers but kept out of ``__str__``: this error is
+    logged and shown to the user, and a response body may hold credentials.
+    """
 
     def __init__(
         self,
@@ -48,5 +52,5 @@ class CentsysApiError(CentsysError):
         if self.status is not None:
             parts.append(f"HTTP {self.status}")
         if self.body:
-            parts.append(f"body={self.body!r}")
+            parts.append(f"body={len(self.body)} bytes")
         return " | ".join(parts)

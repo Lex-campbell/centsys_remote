@@ -18,6 +18,13 @@
         "data": {
           "otp": "One-time PIN"
         }
+      },
+      "reauth_confirm": {
+        "title": "Sign in again",
+        "description": "Your CenSys session has expired. A new one-time PIN has been sent to {number} - enter it below to reconnect your gates.",
+        "data": {
+          "otp": "One-time PIN"
+        }
       }
     },
     "error": {
@@ -27,7 +34,14 @@
       "otp_not_sent": "The backend did not send an OTP. Check the number and try again."
     },
     "abort": {
-      "already_configured": "This mobile number is already configured."
+      "already_configured": "This mobile number is already configured.",
+      "reauth_successful": "Signed in again successfully."
+    }
+  },
+  "issues": {
+    "no_gates_linked": {
+      "title": "No gates linked to this number",
+      "description": "You're signed in, but no gates are linked to this phone number yet.\n\nOpen the **MyCentsys Remote** app and check that your gate appears there for this number. If it doesn't, the gate's admin needs to add your number as a **remote user** on the operator - a direct or Bluetooth-only connection isn't enough.\n\nOnce it's linked the gate appears here automatically within about a minute, and this notice clears itself. No restart needed."
     }
   },
   "entity": {
@@ -109,6 +123,7 @@
       "gsm_sms_tokens": { "name": "SMS tokens remaining" }
     },
     "button": {
+      "pedestrian": { "name": "Pedestrian" },
       "gsm_refresh_airtime": { "name": "Refresh airtime" }
     }
   }

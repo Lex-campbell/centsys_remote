@@ -20,18 +20,29 @@ import struct
 import tempfile
 import threading
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 
 _LOGGER = logging.getLogger(__name__)
 
 # Private CA; leaf is CN=CentsysQA with no IP SAN (we connect by Azure IP).
 MQTT_TLS_SERVER_NAME = "CentsysQA"
-_CENTSYS_CA_PEM = (Path(__file__).resolve().parent / "certs" / "centsys_ca.pem").read_text()
+
+
+@lru_cache(maxsize=1)
+def _ca_pem() -> str:
+    """Read the pinned CA once.
+
+    Deliberately not read at import time: this module is imported lazily from
+    the event loop, and reading a file there is blocking I/O. Every caller
+    reaches this from an executor thread.
+    """
+    return (Path(__file__).resolve().parent / "certs" / "centsys_ca.pem").read_text()
 
 
 def mqtt_ssl_context(*, certfile: str, keyfile: str) -> ssl.SSLContext:
     """SSL context for Centsys MQTT: pinned CA + client cert (mTLS)."""
-    ctx = ssl.create_default_context(cadata=_CENTSYS_CA_PEM)
+    ctx = ssl.create_default_context(cadata=_ca_pem())
     # Centurion's certs omit Authority Key Identifier; VERIFY_X509_STRICT
     # (default on HA's newer OpenSSL) rejects that. Chain + hostname still checked.
     if hasattr(ssl, "VERIFY_X509_STRICT"):

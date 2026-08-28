@@ -233,7 +233,7 @@ class CentsysGsmGateCover(CentsysGsmEntity, CoverEntity):
                 self.coordinator.set_live_gate_status(self._key, None)
                 await self.coordinator.async_request_refresh()
 
-        self.hass.async_create_background_task(
+        self.coordinator.async_spawn(
             _runner(), name=f"centsys_gsm_follow_{self._key}"
         )
 

@@ -24,5 +24,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         coordinator: CentsysCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
-        coordinator.dismiss_no_devices_notice()
+        coordinator.dismiss_no_devices_issue()
+        # Live follows and airtime polls run for over a minute; stop them so a
+        # reload does not leave the old entry's jobs talking to the backend.
+        await coordinator.async_shutdown()
     return unload_ok
