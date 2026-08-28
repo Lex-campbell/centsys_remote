@@ -1,4 +1,4 @@
-"""Binary sensors for CenSys Gate Remote."""
+"""Binary sensors for Centsys Gate Remote."""
 
 from __future__ import annotations
 

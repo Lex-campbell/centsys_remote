@@ -1,6 +1,6 @@
 {
   "domain": "centsys_remote",
-  "name": "CenSys Gate Remote",
+  "name": "Centsys Gate Remote",
   "codeowners": ["@lex-campbell"],
   "config_flow": true,
   "documentation": "https://github.com/lex-campbell/centsys_remote",
@@ -8,5 +8,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/lex-campbell/centsys_remote/issues",
   "requirements": ["paho-mqtt>=2.1"],
-  "version": "0.4.9"
+  "version": "0.4.10"
 }

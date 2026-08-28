@@ -1,8 +1,8 @@
-# CenSys Gate Remote for Home Assistant
+# Centsys Gate Remote for Home Assistant
 
 Control and monitor your Centurion gate operator directly from Home Assistant — open and close the gate, see live open/closed status, and track battery, mains power, safety beams and more. Works with **SMART Wi-Fi operators** (e.g. **D5 Evo SMART**) and, experimentally, older **GSM/ULTRA** operators reached through a cellular module (see [Supported devices](#supported-devices)).
 
-> **Status: beta.** This is an unofficial, community-built integration and is not affiliated with or endorsed by Centurion Systems. It talks to the same cloud service the official CenSys app uses. Use at your own risk; feedback is very welcome (see [Giving feedback](#giving-feedback)).
+> **Status: beta.** This is an unofficial, community-built integration and is not affiliated with or endorsed by Centurion Systems. It talks to the same cloud service the official Centsys app uses. Use at your own risk; feedback is very welcome (see [Giving feedback](#giving-feedback)).
 
 ![The gate operator in Home Assistant, showing controls, sensors and diagnostics](images/device-dashboard.png)
 
@@ -54,7 +54,7 @@ Using something not listed here? It will very likely still work — please let u
 ## Requirements
 
 - **Home Assistant 2024.4 or newer.**
-- A **Centurion gate operator** (SMART Wi-Fi or GSM/ULTRA — see [Supported devices](#supported-devices)) already set up and working in the official **CenSys / MyCentsys Remote** app.
+- A **Centurion gate operator** (SMART Wi-Fi or GSM/ULTRA — see [Supported devices](#supported-devices)) already set up and working in the official **Centsys / MyCentsys Remote** app.
 - The **phone number** registered to that operator in the app (you'll receive a one-time PIN during setup).
 - Home Assistant must have **outbound internet access** (the integration talks to Centurion's cloud).
 - **The gate must be linked to your number as a remote user** (see below).
@@ -76,7 +76,7 @@ There are no extra Python packages to install by hand — Home Assistant install
 
 1. In HACS, open the **⋮** menu → **Custom repositories**.
 2. Add `https://github.com/lex-campbell/centsys_remote` with category **Integration**.
-3. Find **CenSys Gate Remote** in HACS, **Download** it, then **restart Home Assistant**.
+3. Find **Centsys Gate Remote** in HACS, **Download** it, then **restart Home Assistant**.
 
 ### Manual (without HACS)
 
@@ -103,7 +103,7 @@ The integration code lives under `custom_components/centsys_remote/` in this rep
 ![Adding the integration and entering your mobile number](images/setup-flow.png)
 
 1. Go to **Settings → Devices & Services → Add Integration**.
-2. Search for **CenSys Gate Remote**.
+2. Search for **Centsys Gate Remote**.
 3. Select your **country** and enter your **mobile number** the same way you did in the app (your local number, e.g. `083 123 4567` — no need to add the country code yourself). Optionally add a name/email, then choose how you'd like to receive your **one-time PIN**:
    - **WhatsApp** *(default)* — the PIN arrives as a WhatsApp message, exactly as the official app does it. This is the method we've tested.
    - **SMS** — the PIN is sent as a text message instead. This option is offered by Centurion's backend, but we haven't been able to verify it on every account, so if no code arrives, switch back to WhatsApp.
@@ -211,8 +211,8 @@ To turn debug logging back off, remove those lines and restart, or run the **Log
 
 ## Troubleshooting
 
-- **"CenSys Gate Remote" doesn't appear in Add Integration.** Make sure the files are at `config/custom_components/centsys_remote/` (with `manifest.json` directly inside) and that you did a **full restart**. Clear your browser cache if needed.
-- **No PIN arrives.** Confirm you selected the right **country** and entered the same mobile number you use in the CenSys app. If you chose **SMS** and nothing comes through, retry the setup and pick **WhatsApp** instead (it's the channel we've confirmed working). Make sure the chosen app (WhatsApp or your messaging app) is reachable on that number.
+- **"Centsys Gate Remote" doesn't appear in Add Integration.** Make sure the files are at `config/custom_components/centsys_remote/` (with `manifest.json` directly inside) and that you did a **full restart**. Clear your browser cache if needed.
+- **No PIN arrives.** Confirm you selected the right **country** and entered the same mobile number you use in the Centsys app. If you chose **SMS** and nothing comes through, retry the setup and pick **WhatsApp** instead (it's the channel we've confirmed working). Make sure the chosen app (WhatsApp or your messaging app) is reachable on that number.
 - **A notification says "no gates linked" / the device has no entities.** Login worked, but no operator has your number added as a **remote user**. Open the official MyCentsys Remote app with the same number — if the gate isn't there either, get an admin to add your number as a remote user on the operator (or add/claim the gate to your account). It will then appear here automatically within about a minute — no restart needed. See [Requirements](#requirements).
 - **Gate won't open from HA but works in the app.** Check the operator is **Online** in HA, and that your account still has permission in the app. Enable debug logging and capture what happens when you press open.
 - **Battery voltage stays *unknown*.** Wait for a telemetry cycle (up to ~15 minutes), or restart HA. If it never populates, the operator may have been asleep/offline at each attempt — grab debug logs.
@@ -222,7 +222,7 @@ To turn debug logging back off, remove those lines and restart, or run the **Log
 
 ## Removing the integration
 
-1. **Settings → Devices & Services → CenSys Gate Remote → ⋮ → Delete.** This removes the device, all entities, and your stored login.
+1. **Settings → Devices & Services → Centsys Gate Remote → ⋮ → Delete.** This removes the device, all entities, and your stored login.
 2. (Optional) Delete the `custom_components/centsys_remote` folder.
 3. Restart Home Assistant.
 

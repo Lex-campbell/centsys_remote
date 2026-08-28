@@ -1,4 +1,4 @@
-"""Base entity for CenSys Gate Remote."""
+"""Base entity for Centsys Gate Remote."""
 
 from __future__ import annotations
 

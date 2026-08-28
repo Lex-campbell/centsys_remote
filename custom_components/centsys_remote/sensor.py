@@ -1,4 +1,4 @@
-"""Sensors for CenSys Gate Remote."""
+"""Sensors for Centsys Gate Remote."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from .entity import CentsysEntity, CentsysGsmEntity, async_setup_dynamic_entitie
 
 @dataclass(frozen=True, kw_only=True)
 class CentsysSensorDescription(SensorEntityDescription):
-    """Describes a CenSys sensor and how to read its value from coordinator data."""
+    """Describes a Centsys sensor and how to read its value from coordinator data."""
 
     value_fn: Callable[[dict[str, Any]], Any]
 

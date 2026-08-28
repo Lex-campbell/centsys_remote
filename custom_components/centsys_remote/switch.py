@@ -1,4 +1,4 @@
-"""Switches for CenSys Gate Remote."""
+"""Switches for Centsys Gate Remote."""
 
 from __future__ import annotations
 

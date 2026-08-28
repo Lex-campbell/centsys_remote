@@ -1,4 +1,4 @@
-"""Buttons for CenSys Gate Remote."""
+"""Buttons for Centsys Gate Remote."""
 
 from __future__ import annotations
 

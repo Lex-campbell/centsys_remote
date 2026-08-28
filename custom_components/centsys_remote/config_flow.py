@@ -1,4 +1,4 @@
-"""Config flow for CenSys Gate Remote (OTP onboarding)."""
+"""Config flow for Centsys Gate Remote (OTP onboarding)."""
 
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ class CentsysConfigFlow(ConfigFlow, domain=DOMAIN):
                 # repair issue (see coordinator) explains the empty state in
                 # the meantime.
                 return self.async_create_entry(
-                    title=self._name or self._number or "CenSys Gate",
+                    title=self._name or self._number or "Centsys Gate",
                     data={
                         CONF_MOBILE_NUMBER: self._number,
                         CONF_TOKEN: token,

@@ -1,4 +1,4 @@
-"""Data update coordinator for CenSys Gate Remote."""
+"""Data update coordinator for Centsys Gate Remote."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def _shape(value: Any) -> str:
 
 
 class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
-    """Polls the CenSys backend for devices and live operator status.
+    """Polls the Centsys backend for devices and live operator status.
 
     The cloud HTTP poll (device list + operator status) runs every
     ``DEFAULT_SCAN_INTERVAL``. Live MQTT telemetry (battery voltage etc.) is

@@ -1,4 +1,4 @@
-"""The CenSys Gate Remote integration."""
+"""The Centsys Gate Remote integration."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from .coordinator import CentsysCoordinator
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up CenSys Gate Remote from a config entry."""
+    """Set up Centsys Gate Remote from a config entry."""
     coordinator = CentsysCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
 
