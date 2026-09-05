@@ -124,6 +124,18 @@ Each gate operator becomes one device. The main control is the **cover**; everyt
 | **Gate** (cover) | Open / close the gate. Centurion operators are single-button triggers, so both buttons pulse the gate and it decides direction from its current position — just like the physical remote. The control greys out to reflect the current state (open disabled when already open, etc.). |
 | **Pedestrian** (button) | On SMART Wi-Fi sliding/swing gates, a partial (pedestrian) opening — the same action as the Pedestrian button in the official app. |
 | **Holiday lock** (switch) | On SMART Wi-Fi gates, switches the operator's Holiday Lock on and off. While it's on the operator ignores triggers, so the gate won't respond to remotes or Home Assistant. The state is read from the gate itself, so it stays correct even when the lock is changed from a remote, a schedule, SmartGuard Air or the MyCentsys Pro app. Not available on garage-door operators. |
+
+> **How quickly do readings update?** Gate position, power and beams come from the cloud and refresh every minute. Battery voltage, temperature and the Holiday lock state come from the operator itself, which has to wake its Wi-Fi radio to report — so they refresh about every 10 minutes to avoid draining battery-backed and solar installs. They also update within seconds whenever the gate is triggered, since the operator is already reporting then.
+>
+> To read the gate on demand, call the standard `homeassistant.update_entity` action on any of its entities:
+>
+> ```yaml
+> action: homeassistant.update_entity
+> target:
+>   entity_id: cover.my_gate
+> ```
+>
+> That wakes the operator for a fresh reading, so it's the quickest way to pick up a change made elsewhere. Put it in an automation on whatever schedule suits you if you'd rather not wait for the 15-minute cycle — but bear in mind every refresh wakes the gate's radio, so keep it modest on battery or solar installs.
 | **Auxiliary outputs** (buttons) | On GSM/ULTRA operators, each additional configured output (pedestrian, lock, garage, ...) becomes a button that sends its activation pulse. |
 | **Two-state outputs** (switches) | A latching output that reports on/off (e.g. a courtesy light) appears as a switch; toggling it sends the operator's activation. State shows once the operator reports it. |
 
@@ -186,7 +198,7 @@ automation:
 ## About the battery & live telemetry
 
 - **Live open/close status** is real time: when you press open/close, the integration follows the gate's live updates for the duration of the cycle, so the cover animates accurately.
-- **Battery voltage and similar deep diagnostics** come from a heavier check that briefly wakes the operator, so they refresh on a **slower schedule (about every 15 minutes)**, not every few seconds. After first setup the **battery voltage may show *unknown* until the first telemetry cycle completes** — this is normal. It will populate shortly.
+- **Battery voltage and similar deep diagnostics** come from a heavier check that briefly wakes the operator, so they refresh on a **slower schedule (about every 10 minutes)**, not every few seconds. After first setup the **battery voltage may show *unknown* until the first telemetry cycle completes** — this is normal. It will populate shortly.
 - Battery is reported as **voltage** (e.g. `13.4 V`) rather than a percentage, because that's the trustworthy value the operator provides. A reading around 13–14 V typically means the operator is on mains with a healthy battery.
 
 ---
@@ -216,7 +228,7 @@ To turn debug logging back off, remove those lines and restart, or run the **Log
 - **No PIN arrives.** Confirm you selected the right **country** and entered the same mobile number you use in the Centsys app. If you chose **SMS** and nothing comes through, retry the setup and pick **WhatsApp** instead (it's the channel we've confirmed working). Make sure the chosen app (WhatsApp or your messaging app) is reachable on that number.
 - **A notification says "no gates linked" / the device has no entities.** Login worked, but no operator has your number added as a **remote user**. Open the official MyCentsys Remote app with the same number — if the gate isn't there either, get an admin to add your number as a remote user on the operator (or add/claim the gate to your account). It will then appear here automatically within about a minute — no restart needed. See [Requirements](#requirements).
 - **Gate won't open from HA but works in the app.** Check the operator is **Online** in HA, and that your account still has permission in the app. Enable debug logging and capture what happens when you press open.
-- **Battery voltage stays *unknown*.** Wait for a telemetry cycle (up to ~15 minutes), or restart HA. If it never populates, the operator may have been asleep/offline at each attempt — grab debug logs.
+- **Battery voltage stays *unknown*.** Wait for a telemetry cycle (up to ~10 minutes), or restart HA. If it never populates, the operator may have been asleep/offline at each attempt — grab debug logs.
 - **State seems to lag.** Steady-state status refreshes about once a minute; live motion is tracked in real time during an open/close. Brief states between polls are expected to be smoothed by the live follow.
 
 ---

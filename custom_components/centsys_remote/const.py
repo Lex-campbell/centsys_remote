@@ -31,7 +31,13 @@ LIVE_FOLLOW_SECONDS = 75.0
 # MQTT telemetry (battery voltage etc.) is far heavier than the HTTP poll: it
 # opens a TLS session and wakes the operator's Wi-Fi radio, so we refresh it on
 # a much slower cadence than the cloud status.
-TELEMETRY_SCAN_INTERVAL = 900
+TELEMETRY_SCAN_INTERVAL = 600
+
+# Floor applied when a user explicitly asks an entity to update
+# (``homeassistant.update_entity``). That request bypasses the slow cadence
+# above so a change made elsewhere is picked up on demand, but the floor stops a
+# tight automation from holding the operator's radio awake.
+TELEMETRY_FORCE_MIN_INTERVAL = 30
 
 # Legacy GWeb (GSM/ULTRA) device config changes rarely; refresh it on a slower
 # cadence than the main cloud status to avoid extra round-trips every poll.

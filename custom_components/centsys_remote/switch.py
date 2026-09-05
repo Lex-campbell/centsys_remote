@@ -15,10 +15,6 @@ from .const import DOMAIN
 from .coordinator import CentsysCoordinator
 from .entity import CentsysEntity, CentsysGsmIoEntity, async_setup_dynamic_entities
 
-# Telemetry families that are gate operators (i.e. not a garage door). Holiday
-# Lock only applies to these, and its activation id means "open" on a garage.
-_GATE_FAMILIES = frozenset({"v2", "vx", "vx52"})
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -32,7 +28,8 @@ async def async_setup_entry(
         if data.get("kind") == "wifi":
             # Garage-door operators have no Holiday Lock, and there the same
             # activation would open the door -- so skip them.
-            if getattr(data.get("overview"), "family", None) == "sdo5":
+            overview = data.get("overview")
+            if overview is not None and overview.is_garage:
                 return []
             return [CentsysHolidayLockSwitch(coordinator, key)]
         if data.get("kind") != "gsm":
@@ -83,34 +80,19 @@ class CentsysHolidayLockSwitch(CentsysEntity, SwitchEntity):
         return overview.holiday_lock if overview is not None else None
 
     async def _gate_mac(self) -> str:
-        """The operator MAC, confirming first that this is not a garage door.
+        """The operator MAC, having confirmed this is a gate and not a garage.
 
         Holiday Lock shares its activation id with the garage open command, so
-        this refuses to act unless telemetry positively reports a gate family.
+        this refuses to act unless telemetry positively reports a gate.
         """
-        data = self._device_data or {}
-        mac = getattr(data.get("device"), "mac_address", None)
+        mac = getattr((self._device_data or {}).get("device"), "mac_address", None)
         if not mac:
             raise HomeAssistantError(
                 "Gate has no MAC address in the cloud device list; cannot build "
                 "the Holiday Lock command."
             )
-        overview = self._overview
-        if overview is None:
-            # Cold start: read telemetry once so the family is known.
-            try:
-                overview = await self.coordinator.client.get_overview(
-                    self._serial, mac=mac
-                )
-            except CentsysError as err:
-                raise HomeAssistantError(
-                    f"Couldn't read the gate's status to confirm Holiday Lock "
-                    f"applies to it: {err}"
-                ) from err
-            if overview is not None:
-                self.coordinator.set_overview(self._serial, overview)
-        family = getattr(overview, "family", None)
-        if family not in _GATE_FAMILIES:
+        overview = await self._read_overview(mac)
+        if overview is None or not overview.is_gate:
             raise HomeAssistantError(
                 "Holiday Lock is only available once the gate has reported its "
                 "status, and it does not apply to garage-door operators."
@@ -134,19 +116,12 @@ class CentsysHolidayLockSwitch(CentsysEntity, SwitchEntity):
                 "busy?)."
             )
 
-        # Read the state back: the operator can accept the command and still not
-        # apply it (e.g. when it has lost its origin), so don't assume success.
-        try:
-            overview = await self.coordinator.client.get_overview(
-                self._serial, mac=mac
-            )
-        except CentsysError:
-            overview = None
+        # Read back rather than assume: the operator can accept the command and
+        # still not apply it, e.g. when it has lost its origin.
+        overview = await self._read_overview(mac, cached=False)
         if overview is None:
             await self.coordinator.async_request_refresh()
-            return
-        self.coordinator.set_overview(self._serial, overview)
-        if before is not None and overview.holiday_lock == before:
+        elif before is not None and overview.holiday_lock == before:
             raise HomeAssistantError(
                 "The gate accepted the Holiday Lock command but did not apply "
                 "it. This can happen when the operator needs attention (for "

@@ -69,6 +69,27 @@ def test_padded_v2_frame_reads_a_sane_battery() -> None:
     assert ov.battery_voltage == 27.6
 
 
+def test_family_helpers_classify_gate_and_garage() -> None:
+    garage = mqtt_remote.parse_device_overview(_HEADER + bytes(24))
+    assert (garage.is_garage, garage.is_gate) == (True, False)
+    gate = mqtt_remote.parse_device_overview(_v2_frame())
+    assert (gate.is_garage, gate.is_gate) == (False, True)
+
+
+def test_unknown_family_is_not_treated_as_a_gate() -> None:
+    # is_gate is an allow-list, so an operator we haven't catalogued withholds
+    # gate-only actions rather than guessing (the Holiday Lock id opens a
+    # garage, so guessing wrong would move a door).
+    class _Unknown:
+        family = "something-new"
+        is_gate = mqtt_remote.DeviceOverview.is_gate
+        is_garage = mqtt_remote.DeviceOverview.is_garage
+
+    probe = _Unknown()
+    assert probe.is_gate is False
+    assert probe.is_garage is False
+
+
 def test_short_body_is_rejected() -> None:
     try:
         mqtt_remote.parse_device_overview(_HEADER + bytes(8))

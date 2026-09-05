@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -14,6 +15,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, MANUFACTURER
 from .coordinator import CentsysCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @callback
@@ -63,6 +66,40 @@ class CentsysEntity(CoordinatorEntity[CentsysCoordinator]):
     @property
     def available(self) -> bool:
         return super().available and self._device_data is not None
+
+    async def _read_overview(self, mac, *, cached: bool = True):
+        """This operator's telemetry, fetching it if needed, or None.
+
+        A fetch wakes the operator's radio, so the cached frame is reused unless
+        ``cached=False`` asks for a fresh read (e.g. to confirm a command took
+        effect). Errors return None; callers decide what "unknown" means, since
+        for some actions it should block and for others it should fall back.
+        """
+        data = self._device_data or {}
+        if cached and data.get("overview") is not None:
+            return data["overview"]
+        try:
+            overview = await self.coordinator.client.get_overview(
+                self._serial, mac=mac
+            )
+        except Exception as err:  # noqa: BLE001 - an unreadable gate isn't an error
+            _LOGGER.debug("Telemetry read failed for %s: %s", self._serial, err)
+            return None
+        self.coordinator.set_overview(self._serial, overview)
+        return overview
+
+    async def async_update(self) -> None:
+        """Refresh on explicit request, including the slow MQTT telemetry.
+
+        Coordinator entities don't poll, so this runs only when a user or
+        automation calls ``homeassistant.update_entity``. Internal refreshes are
+        left unforced so they stay light on the gate. The enabled check mirrors
+        the base class, which ignores updates for a disabled entity -- forcing
+        there would only wake the operator on some later cycle.
+        """
+        if self.enabled:
+            self.coordinator.async_force_telemetry()
+        await super().async_update()
 
     @property
     def device_info(self) -> DeviceInfo:

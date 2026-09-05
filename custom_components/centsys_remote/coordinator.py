@@ -29,6 +29,7 @@ from .const import (
     LIVE_FOLLOW_SECONDS,
     LIVE_STATUS_TTL,
     NO_GATES_HELP_URL,
+    TELEMETRY_FORCE_MIN_INTERVAL,
     TELEMETRY_SCAN_INTERVAL,
 )
 
@@ -87,6 +88,9 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         # Retry cadence for telemetry, widened on each empty cycle (see
         # _maybe_refresh_telemetry).
         self._telemetry_interval = float(DEFAULT_SCAN_INTERVAL)
+        # Set when a user explicitly asks an entity to update, so the next
+        # cycle reads MQTT telemetry instead of waiting for its slow cadence.
+        self._force_telemetry = False
         self._no_devices_issue = f"no_devices_{entry.entry_id}"
         self._backup_diagnostic_done = False
         self._gsm_devices: list[Any] = []
@@ -142,9 +146,21 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         if overview is None:
             return
         self._overview[serial] = overview
+        # This is a real telemetry read, so it counts as one: no need to wake
+        # the operator again on the usual cadence right after.
+        self._last_telemetry = time.monotonic()
         if self.data and serial in self.data:
             self.data[serial]["overview"] = overview
         self.async_update_listeners()
+
+    def async_force_telemetry(self) -> None:
+        """Let the next update read MQTT telemetry, ignoring its slow cadence.
+
+        Used when a user asks an entity to update, so a change made elsewhere --
+        Holiday Lock set from a remote or the app, say -- is picked up on demand.
+        ``TELEMETRY_FORCE_MIN_INTERVAL`` still applies as a floor.
+        """
+        self._force_telemetry = True
 
     def start_live_follow(self, serial: str) -> None:
         """Follow the MQTT status stream for one open/close cycle after a press.
@@ -161,12 +177,17 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._live_following.add(serial)
         loop = self.hass.loop
 
+        def _apply(overview) -> None:
+            # The stream is already open, so keep the whole frame rather than
+            # just the position: it also carries battery, beams and the Holiday
+            # Lock bit, which would otherwise wait for the slow telemetry cycle.
+            self.set_overview(serial, overview)
+            self.set_live_gate_status(serial, overview.gate_status)
+
         def _on_overview(overview) -> None:  # called from a worker thread
             if overview is None:
                 return
-            loop.call_soon_threadsafe(
-                self.set_live_gate_status, serial, overview.gate_status
-            )
+            loop.call_soon_threadsafe(_apply, overview)
 
         async def _runner() -> None:
             try:
@@ -446,7 +467,11 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         every poll, forever. Failures are expected and keep the cached values.
         """
         now = time.monotonic()
-        if (now - self._last_telemetry) < self._telemetry_interval:
+        forced, self._force_telemetry = self._force_telemetry, False
+        interval = (
+            float(TELEMETRY_FORCE_MIN_INTERVAL) if forced else self._telemetry_interval
+        )
+        if (now - self._last_telemetry) < interval:
             return
         self._last_telemetry = now
 

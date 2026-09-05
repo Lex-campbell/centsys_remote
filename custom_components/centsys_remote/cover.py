@@ -97,28 +97,6 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
         status = self._status
         return bool(status and status.is_closing)
 
-    async def _resolve_is_garage(self, data: dict, mac) -> bool:
-        """Whether this operator is a garage door (only garages report "sdo5").
-
-        RUN must only ever be sent to a telemetry-confirmed garage: sending it to
-        a gate can trigger the operator's Holiday Lockout. If telemetry isn't
-        cached yet (cold start), fetch a fresh overview once so a genuine garage
-        is still detected; any failure falls back to ``False`` (the safe TRG
-        default).
-        """
-        overview = data.get("overview")
-        if overview is None:
-            try:
-                overview = await self.coordinator.client.get_overview(
-                    self._serial, mac=mac
-                )
-            except CentsysError:
-                return False
-            except Exception:  # noqa: BLE001 - never let detection block a safe TRG
-                return False
-            self.coordinator.set_overview(self._serial, overview)
-        return getattr(overview, "family", None) == "sdo5"
-
     async def _trigger(self) -> None:
         data = self._device_data or {}
         device = data.get("device")
@@ -128,7 +106,11 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
                 "Gate has no MAC address in the cloud device list; cannot build "
                 "the trigger packet."
             )
-        is_garage = await self._resolve_is_garage(data, mac)
+        # RUN must only ever go to a confirmed garage: on a gate the same
+        # activation triggers Holiday Lock. An operator we can't read falls back
+        # to TRG, which is the safe default for anything that isn't a garage.
+        overview = await self._read_overview(mac)
+        is_garage = bool(overview and overview.is_garage)
         try:
             ok = await self.coordinator.client.open_gate(
                 self._serial,

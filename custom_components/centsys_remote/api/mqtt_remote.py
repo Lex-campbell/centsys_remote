@@ -107,6 +107,13 @@ _POWER_STATUS = {0: "normal", 1: "low", 2: "unknown", 3: "psu_comms_off"}
 # triggers until it is switched off again.
 CONDITION_HOLIDAY_LOCK = 0x1
 
+# Telemetry families. Several actions differ between a garage door and a gate --
+# in one case the same activation opens a garage but toggles Holiday Lock on a
+# gate -- so callers ask via ``DeviceOverview.is_garage`` / ``.is_gate`` rather
+# than comparing family strings themselves.
+GARAGE_FAMILY = "sdo5"
+GATE_FAMILIES = frozenset({"v2", "vx", "vx52"})
+
 
 def _beam_label(value: int) -> str:
     """Collapse an APPBEAM_DISPLAY value to a simple beam condition."""
@@ -157,6 +164,20 @@ class DeviceOverview:
     def holiday_lock(self) -> bool:
         """Whether Holiday Lock is currently active on this operator."""
         return bool(self.condition_flags & CONDITION_HOLIDAY_LOCK)
+
+    @property
+    def is_garage(self) -> bool:
+        """Whether this operator is a garage door."""
+        return self.family == GARAGE_FAMILY
+
+    @property
+    def is_gate(self) -> bool:
+        """Whether this is a known gate operator (a sliding or swing gate).
+
+        Stricter than ``not is_garage``: an unrecognised family answers False,
+        so an action that is only safe on a gate is withheld rather than guessed.
+        """
+        return self.family in GATE_FAMILIES
 
 
 # Known ``deviceOverview`` body lengths -> (struct layout, family label).
@@ -252,7 +273,7 @@ def parse_device_overview(payload: bytes) -> DeviceOverview:
 
     temp_c = temp if temp is None else (temp - 256 if temp > 127 else temp)
     # Garage-door operators use a distinct status enum and battery scale.
-    is_sdo = family == "sdo5"
+    is_sdo = family == GARAGE_FAMILY
     status_map = _SDO_GATE_STATUS if is_sdo else _GATE_STATUS
     batt_divisor = 10.0 if is_sdo else 100.0
     return DeviceOverview(

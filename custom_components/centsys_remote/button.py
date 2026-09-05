@@ -31,12 +31,11 @@ async def async_setup_entry(
     def _factory(key: str):
         data = coordinator.data.get(key) or {}
         if data.get("kind") == "wifi":
-            # Pedestrian opening is a SMART sliding/swing action; garage-door
-            # operators have no pedestrian mode. Only a garage reports the
-            # "sdo5" telemetry family, so that is the signal -- productType is
-            # unreliable (the same type ships as either a gate or a garage).
+            # Garage-door operators have no pedestrian mode. The telemetry
+            # family is the signal; productType is unreliable, as the same type
+            # ships as either a gate or a garage.
             overview = data.get("overview")
-            if getattr(overview, "family", None) == "sdo5":
+            if overview is not None and overview.is_garage:
                 return []
             return [CentsysWifiPedestrianButton(coordinator, key)]
         if data.get("kind") != "gsm":
