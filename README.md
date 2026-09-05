@@ -123,6 +123,7 @@ Each gate operator becomes one device. The main control is the **cover**; everyt
 | --- | --- |
 | **Gate** (cover) | Open / close the gate. Centurion operators are single-button triggers, so both buttons pulse the gate and it decides direction from its current position — just like the physical remote. The control greys out to reflect the current state (open disabled when already open, etc.). |
 | **Pedestrian** (button) | On SMART Wi-Fi sliding/swing gates, a partial (pedestrian) opening — the same action as the Pedestrian button in the official app. |
+| **Holiday lock** (switch) | On SMART Wi-Fi gates, switches the operator's Holiday Lock on and off. While it's on the operator ignores triggers, so the gate won't respond to remotes or Home Assistant. The state is read from the gate itself, so it stays correct even when the lock is changed from a remote, a schedule, SmartGuard Air or the MyCentsys Pro app. Not available on garage-door operators. |
 | **Auxiliary outputs** (buttons) | On GSM/ULTRA operators, each additional configured output (pedestrian, lock, garage, ...) becomes a button that sends its activation pulse. |
 | **Two-state outputs** (switches) | A latching output that reports on/off (e.g. a courtesy light) appears as a switch; toggling it sends the operator's activation. State shows once the operator reports it. |
 

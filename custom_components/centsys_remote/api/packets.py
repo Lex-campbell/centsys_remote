@@ -20,6 +20,14 @@ ACTIVATION_TRG = 34
 ACTIVATION_PED = 35
 ACTIVATION_GDO_RUN = 1
 
+# Toggles Holiday Lock on a gate operator (the same id both sets and clears it).
+#
+# CAUTION: this is deliberately the same id as ``ACTIVATION_GDO_RUN`` -- the
+# operator interprets it by family. On a gate it toggles Holiday Lock; on a
+# garage door it opens the door. Never send it until the family is known to be a
+# gate (see the cover's garage detection).
+ACTIVATION_HOLIDAY_LOCK = 1
+
 _ALGO_VERSION = 1
 _KEY_VERSION = 1
 

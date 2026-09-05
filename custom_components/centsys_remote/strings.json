@@ -125,6 +125,9 @@
     "button": {
       "pedestrian": { "name": "Pedestrian" },
       "gsm_refresh_airtime": { "name": "Refresh airtime" }
+    },
+    "switch": {
+      "holiday_lock": { "name": "Holiday lock" }
     }
   }
 }

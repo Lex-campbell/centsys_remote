@@ -757,6 +757,33 @@ class CentsysRemoteClient:
             ),
         )
 
+    async def toggle_holiday_lock(
+        self,
+        serial: str,
+        *,
+        mac: str | bytes,
+        au: bool = False,
+        timeout: float = 8.0,
+    ) -> bool:
+        """Toggle Holiday Lock on a gate operator. Returns True if acknowledged.
+
+        Uses the same MQTT handshake as :meth:`open_gate` with the Holiday Lock
+        activation, which both sets and clears the lock.
+
+        The caller MUST have established that this operator is not a garage
+        door: the same activation id opens a garage (see
+        ``packets.ACTIVATION_HOLIDAY_LOCK``).
+        """
+        from . import packets
+
+        return await self.open_gate(
+            serial,
+            mac=mac,
+            activation_id=packets.ACTIVATION_HOLIDAY_LOCK,
+            au=au,
+            timeout=timeout,
+        )
+
     def _wake_packet(self, mac: str | bytes | None) -> bytes:
         """Build the cmd 01 identity packet used to wake telemetry (no actuation).
 

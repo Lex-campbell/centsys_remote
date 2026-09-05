@@ -79,7 +79,9 @@ def configure_mqtt_tls(client, *, certfile: str, keyfile: str) -> None:
 #   * other "...Plus" gate operators        -> INFRATP_OVERVIEW_VX   (38 bytes)
 #   * garage-door operators                 -> APPMOBILE_STATUS_..V3 (24 bytes)
 #
-# We auto-detect by the post-header length and decode the fields below.
+# We auto-detect by the post-header length (see ``_BODY_LAYOUTS``) and decode the
+# fields below. Two further lengths are seen in the field: 52 bytes (a separate
+# product line, reported as "vx52") and 64 bytes (a padded v2 frame).
 
 # Slider/swing operators.
 _GATE_STATUS = {
@@ -99,6 +101,11 @@ _SDO_GATE_STATUS = {
     5: "partly_open",
 }
 _POWER_STATUS = {0: "normal", 1: "low", 2: "unknown", 3: "psu_comms_off"}
+
+# ``condition_flags`` bit reporting that Holiday Lock is active on a gate
+# operator. Holiday Lock inhibits the operator's inputs, so the gate ignores
+# triggers until it is switched off again.
+CONDITION_HOLIDAY_LOCK = 0x1
 
 
 def _beam_label(value: int) -> str:
@@ -124,7 +131,7 @@ def _beam_label(value: int) -> str:
 class DeviceOverview:
     """Decoded live telemetry from a "<serial>/deviceOverview" MQTT message."""
 
-    family: str  # "v2" | "vx" | "sdo5"
+    family: str  # "v2" | "vx" | "vx52" | "sdo5"
     gate_status: str | None
     gate_status_raw: int
     battery_voltage: float | None  # volts
@@ -146,17 +153,61 @@ class DeviceOverview:
     def as_dict(self) -> dict:
         return asdict(self)
 
+    @property
+    def holiday_lock(self) -> bool:
+        """Whether Holiday Lock is currently active on this operator."""
+        return bool(self.condition_flags & CONDITION_HOLIDAY_LOCK)
+
+
+# Known ``deviceOverview`` body lengths -> (struct layout, family label).
+#
+# Only the head of the body differs between layouts (where the battery and
+# temperature sit); the flag/timer block that follows is shared. Two lengths
+# share a layout with a different label: a 52-byte body is a separate product
+# line (its battery reads ~13 V rather than ~27 V), and a 64-byte body is a
+# zero-padded ``v2`` frame.
+_BODY_LAYOUTS: dict[int, tuple[str, str]] = {
+    24: ("sdo5", "sdo5"),
+    36: ("v2", "v2"),
+    38: ("vx", "vx"),
+    52: ("vx", "vx52"),
+    64: ("v2", "v2"),
+}
+
+
+def _layout_for(length: int) -> tuple[str, str]:
+    """Return the (struct layout, family) to decode a body of this length.
+
+    An unknown length is decoded with the nearest known layout rather than
+    dropped: the flag/timer block is shared across the gate families, so the
+    useful fields still land even on an operator we haven't catalogued.
+    """
+    known = _BODY_LAYOUTS.get(length)
+    if known is not None:
+        return known
+    if length < 24:
+        raise ValueError(f"deviceOverview too short: {length} bytes")
+    layout = "sdo5" if length < 36 else ("v2" if length < 38 else "vx")
+    _LOGGER.debug(
+        "Unrecognized deviceOverview body length %s bytes; decoding it with the "
+        "%s layout",
+        length,
+        layout,
+    )
+    return layout, layout
+
 
 def parse_device_overview(payload: bytes) -> DeviceOverview:
     """Decode a raw deviceOverview MQTT payload into structured telemetry.
 
     ``payload`` is the full MQTT payload; the leading 4-byte header is stripped
-    here (matching the app). Raises ValueError if the body length is unknown.
+    here (matching the app). Raises ValueError if the body is too short to decode.
     """
     body = bytes(payload)[4:]
     n = len(body)
+    layout, family = _layout_for(n)
 
-    if n >= 36 and n < 38:  # INFRATP_OVERVIEW_V2 (slider-plus, e.g. D5 Evo)
+    if layout == "v2":
         (
             batt,
             gate_pos,
@@ -173,8 +224,8 @@ def parse_device_overview(payload: bytes) -> DeviceOverview:
             power,
         ) = struct.unpack_from("<HBBIIIIHBBBBB", body, 0)
         in_v = struct.unpack_from("<H", body, 34)[0]
-        family, gate_position = "v2", gate_pos
-    elif n >= 38:  # INFRATP_OVERVIEW_VX
+        gate_position = gate_pos
+    elif layout == "vx":
         (
             _ver,
             temp,
@@ -191,15 +242,13 @@ def parse_device_overview(payload: bytes) -> DeviceOverview:
         ) = struct.unpack_from("<BBHIIIIBBBBB", body, 0)
         power = body[28]
         in_v = struct.unpack_from("<H", body, 36)[0]
-        family, gate_position = "vx", None
-    elif n >= 24:  # APPMOBILE_STATUS_OVERVIEWV3 (garage door)
+        gate_position = None
+    else:  # garage-door operator
         nf1, batt, cond, _pad, secs, _timer, _pad2, gate_st, irbc, _xmr, power = (
             struct.unpack_from("<IHBBHBBBBBB", body, 0)
         )
         nf2, temp, irbo, in_v = 0, None, 0, 0
-        family, gate_position = "sdo5", None
-    else:
-        raise ValueError(f"unrecognized deviceOverview length: {n} bytes")
+        gate_position = None
 
     temp_c = temp if temp is None else (temp - 256 if temp > 127 else temp)
     # Garage-door operators use a distinct status enum and battery scale.

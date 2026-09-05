@@ -40,3 +40,15 @@ def test_product_type_no_longer_selects_run() -> None:
     # productType is unreliable (type 50 ships as both gate and garage), so it
     # must not exist as a RUN fast path any more.
     assert not hasattr(packets, "GDO_PRODUCT_TYPES")
+
+
+def test_holiday_lock_shares_the_garage_activation_id() -> None:
+    # The operator reads this id by family: Holiday Lock on a gate, open on a
+    # garage. If these ever diverge the callers' garage guards need revisiting.
+    assert packets.ACTIVATION_HOLIDAY_LOCK == packets.ACTIVATION_GDO_RUN == 1
+
+
+def test_holiday_lock_is_never_the_default_open() -> None:
+    # A plain open must never resolve to the Holiday Lock / garage id on a gate.
+    assert packets.trigger_activation_id() != packets.ACTIVATION_HOLIDAY_LOCK
+    assert packets.trigger_activation_id(is_garage=False) == packets.ACTIVATION_TRG
