@@ -17,7 +17,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import CentsysRemoteClient, SharedAccess
-from .api.exceptions import CentsysAuthError, CentsysError
+from .api.exceptions import CentsysApiError, CentsysAuthError, CentsysError
 from .const import (
     AIRTIME_POLL_ATTEMPTS,
     AIRTIME_POLL_INTERVAL,
@@ -314,6 +314,15 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         await self._log_shared_access()
         await self._log_gweb_backup()
 
+    def _redact(self, text: str) -> str:
+        """Mask this account's phone number in a string before it is logged."""
+        number = self.client.mobile_number or ""
+        digits = "".join(c for c in number if c.isdigit())
+        for token in (number, digits):
+            if token:
+                text = text.replace(token, "<number>")
+        return text
+
     async def _log_shared_access(self) -> None:
         """Log any community / shared-access sites granted to this number.
 
@@ -324,6 +333,19 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         """
         try:
             shared = await self.client.get_shared_accesses()
+        except CentsysApiError as err:
+            # A 4xx here means the request shape/auth isn't right yet. The body
+            # is the backend's own validation message -- it names the fields it
+            # expects, which is exactly what's needed to add support -- so
+            # surface it, with this number redacted to honour the no-PII rule.
+            _LOGGER.info(
+                "Shared-access probe returned HTTP %s (expected until support is "
+                "added). The backend's response is logged below to reveal the "
+                "request it wants - please share it: %s",
+                err.status,
+                self._redact(err.body or "")[:1000],
+            )
+            return
         except Exception as err:  # noqa: BLE001 - purely diagnostic
             _LOGGER.debug("Shared-access diagnostic fetch failed: %s", err)
             return
