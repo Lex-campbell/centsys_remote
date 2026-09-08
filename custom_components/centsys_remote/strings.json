@@ -41,7 +41,7 @@
   "issues": {
     "no_gates_linked": {
       "title": "No gates linked to this number",
-      "description": "You're signed in, but no gates are linked to this phone number yet.\n\nOpen the **MyCentsys Remote** app and check that your gate appears there for this number. If it doesn't, the gate's admin needs to add your number as a **remote user** on the operator - a direct or Bluetooth-only connection isn't enough.\n\nOnce it's linked the gate appears here automatically within about a minute, and this notice clears itself. No restart needed."
+      "description": "You're signed in, but no gates are linked to this phone number yet.\n\nOpen the **MyCentsys Remote** app and check that your gate appears there for this number. If it doesn't, the gate's admin needs to add your number as a **remote user** on the operator - a direct or Bluetooth-only connection isn't enough.\n\nOnce it's linked the gate appears here automatically within about a minute, and this notice clears itself. No restart needed.\n\n**Community or shared gate?** If your number instead has *shared access* to a community/estate site (it shows in the app as a site with actions like *Main Gate* or *Pedestrian Gate* rather than a gate you own), that isn't supported yet. Enabling debug logging captures details that help add support - please share them in a GitHub issue."
     }
   },
   "entity": {

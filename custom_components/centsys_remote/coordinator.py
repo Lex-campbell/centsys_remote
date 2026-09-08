@@ -16,7 +16,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import CentsysRemoteClient
+from .api import CentsysRemoteClient, SharedAccess
 from .api.exceptions import CentsysAuthError, CentsysError
 from .const import (
     AIRTIME_POLL_ATTEMPTS,
@@ -303,14 +303,69 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         ``GetDevicesByRemoteUserNumber`` only returns SMART Wi-Fi operators
         where this number is a linked *remote user*. GSM/ULTRA units (and older
         non-Wi-Fi motors reached via an add-on module) live on the legacy GWeb
-        gateway instead. This probes both fallback sources and logs what the
-        backend holds, so a user can enable debug logging and share it.
+        gateway instead, and community / shared-access "sites" live on the
+        AccessSharing backend. This probes all fallback sources and logs what
+        the backend holds, so a user can enable debug logging and share it.
         """
         if self._backup_diagnostic_done:
             return
         self._backup_diagnostic_done = True
         await self._log_legacy_config()
+        await self._log_shared_access()
         await self._log_gweb_backup()
+
+    async def _log_shared_access(self) -> None:
+        """Log any community / shared-access sites granted to this number.
+
+        These are gates the user does not own but may trigger (e.g. a shared
+        estate "site" exposing Main Gate / Pedestrian Gate actions). They are
+        returned by the AccessSharing backend, which the integration does not
+        yet control, so this surfaces what the backend holds to guide support.
+        """
+        try:
+            shared = await self.client.get_shared_accesses()
+        except Exception as err:  # noqa: BLE001 - purely diagnostic
+            _LOGGER.debug("Shared-access diagnostic fetch failed: %s", err)
+            return
+
+        if not shared:
+            _LOGGER.info("No community / shared-access sites for this number.")
+            return
+
+        # The response may be a bare list of sites or a dict wrapping one; pull
+        # out the first list of dicts so a site/action summary can be logged.
+        entries = shared
+        if isinstance(shared, dict):
+            entries = next(
+                (v for v in shared.values() if isinstance(v, list)),
+                [],
+            )
+        sites = (
+            [SharedAccess.from_json(s) for s in entries if isinstance(s, dict)]
+            if isinstance(entries, list)
+            else []
+        )
+
+        if sites:
+            summary = ", ".join(
+                f"{s.name or s.access_guid or '?'} "
+                f"[{', '.join(a.name for a in s.actions) or 'no actions'}]"
+                for s in sites
+            )
+            _LOGGER.info(
+                "This number has %d community / shared-access site(s): %s. These "
+                "are shared gates the integration does not control yet; the "
+                "response shape is logged at debug level to help add support.",
+                len(sites),
+                summary,
+            )
+        else:
+            _LOGGER.info(
+                "This number has community / shared-access data the integration "
+                "does not control yet; the response shape is logged at debug "
+                "level to help add support."
+            )
+        _LOGGER.debug("AccessSharing response: %s", _shape(shared))
 
     async def _log_legacy_config(self) -> None:
         """Log the legacy GWeb device config (GSM/ULTRA devices show up here)."""

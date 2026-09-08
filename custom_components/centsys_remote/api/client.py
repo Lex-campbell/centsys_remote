@@ -620,6 +620,41 @@ class CentsysRemoteClient:
             return None
         return self._parse_json(text)
 
+    async def get_shared_accesses(self) -> Any:
+        """Fetch community / shared-access "sites" granted to this number.
+
+        This is the ``AccessSharing`` backend the official app uses for gates a
+        user does not own but has been granted access to -- e.g. a residential
+        estate's shared "site" exposing actions such as *Main Gate* and
+        *Pedestrian Gate*. These operators are returned by neither
+        ``GetDevicesByRemoteUserNumber`` (Wi-Fi remote users) nor
+        ``MCRConfEnV3`` (GSM/ULTRA buttons), so a shared-access-only number
+        looks empty to both and the integration reports "no gates linked".
+
+        The request/response shape here is still being characterised from live
+        traffic (see the project notes on AccessSharing), so this is deliberately
+        defensive: it is currently used for diagnostics only, to surface what the
+        backend holds for an otherwise-empty account. ``UserNumber`` mirrors the
+        ``...ByUserNumber`` endpoint name; the session bearer is presented in
+        case the service requires it. Returns the parsed response, or ``None``
+        when the backend reports no shared access (HTTP 404).
+        """
+        token = self._require_token()
+        url = const.GWEB_ACCESS_BASE + const.EP_GWEB_ACCESS_SHARING
+        status, text = await self._request(
+            "POST",
+            url,
+            op="GetAccessesByUserNumber",
+            bearer=token,
+            json_body={"UserNumber": self.mobile_number},
+            content_type="application/json",
+            # 404 = no shared accesses for this number; a normal empty result.
+            expected_status=(200, 404),
+        )
+        if status == 404:
+            return None
+        return self._parse_json(text)
+
     # -- MQTT client certificate ------------------------------------------
 
     async def get_certificate(self) -> dict[str, str]:

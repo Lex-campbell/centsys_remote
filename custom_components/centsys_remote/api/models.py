@@ -365,6 +365,75 @@ class GsmDeviceStatus:
 
 
 @dataclass
+class SharedAction:
+    """A single triggerable action within a shared-access site.
+
+    Field names are parsed defensively from the AccessSharing response, whose
+    exact shape is still being characterised from live traffic.
+    """
+
+    name: str = ""
+    action_id: int | str | None = None
+    serial_number: str | None = None
+    mac_address: str | None = None
+    device_id: int | str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "SharedAction":
+        return cls(
+            name=str(
+                _pick(data, "ActionName", "Name", "IOName", "CommandName", default="")
+                or ""
+            ),
+            action_id=_pick(data, "ActionId", "Id", "IONumber", "TriggerId", "ActivationId"),
+            serial_number=_pick(
+                data, "DeviceSerialNumber", "SerialNumber", "OperatorSerialNumber"
+            ),
+            mac_address=_pick(data, "DeviceMacAddress", "MacAddress"),
+            device_id=_pick(data, "DeviceId", "DEVICE_ID"),
+            raw=data,
+        )
+
+
+@dataclass
+class SharedAccess:
+    """A community / shared-access "site" granted to this number (AccessSharing).
+
+    A shared access is a gate the user does not own but may trigger, typically
+    exposing one or more :class:`SharedAction` (e.g. *Main Gate*, *Pedestrian
+    Gate* on a residential estate). The AccessSharing response shape is still
+    being characterised, so parsing is defensive.
+    """
+
+    access_guid: str | None = None
+    name: str = ""
+    access_type: int | str | None = None
+    revoked: bool | None = None
+    actions: list[SharedAction] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def key(self) -> str:
+        """Stable id for this shared access within coordinator data / entities."""
+        return f"shared-{self.access_guid or self.name}"
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any]) -> "SharedAccess":
+        actions_raw = _pick(data, "Actions", "Activations", "IOConfigs", default=[]) or []
+        return cls(
+            access_guid=_pick(data, "AccessGuid", "AccessShareId", "Guid"),
+            name=str(_pick(data, "DeviceName", "SiteName", "Name", default="") or ""),
+            access_type=_pick(data, "AccessType", "AccessShareType"),
+            revoked=_pick(data, "AccessRevoked", "Revoked"),
+            actions=[
+                SharedAction.from_json(a) for a in actions_raw if isinstance(a, dict)
+            ],
+            raw=data,
+        )
+
+
+@dataclass
 class OperatorStatus:
     """Live status from GetOperatorOverview."""
 
