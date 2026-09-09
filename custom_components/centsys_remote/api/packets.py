@@ -26,6 +26,10 @@ ACTIVATION_GDO_RUN = 1
 # is known to be a gate.
 ACTIVATION_HOLIDAY_LOCK = 1
 
+# Toggles Keep Open (the same id both sets and clears it). Unlike Holiday Lock,
+# this id means keep-open on every family, so it needs no gate-only guard.
+ACTIVATION_KEEP_OPEN = 4
+
 _ALGO_VERSION = 1
 _KEY_VERSION = 1
 

@@ -631,13 +631,16 @@ class CentsysRemoteClient:
         ``MCRConfEnV3`` (GSM/ULTRA buttons), so a shared-access-only number
         looks empty to both and the integration reports "no gates linked".
 
-        The request/response shape here is still being characterised from live
-        traffic (see the project notes on AccessSharing), so this is deliberately
-        defensive: it is currently used for diagnostics only, to surface what the
-        backend holds for an otherwise-empty account. ``UserNumber`` mirrors the
-        ``...ByUserNumber`` endpoint name; the session bearer is presented in
-        case the service requires it. Returns the parsed response, or ``None``
-        when the backend reports no shared access (HTTP 404).
+        The request body carries a single ``Number`` field (the account's E.164
+        number) -- confirmed from the backend's own validation error -- and the
+        session bearer is presented in case the service requires it.
+
+        A number with no shared access is a normal, common case, not a fault:
+        the service answers it with ``404`` or a ``400`` (the number simply is
+        not enrolled in AccessSharing). Both are treated as "no shared access"
+        and return ``None`` quietly, so an ordinary account without a shared
+        gate does not log a warning on every reload. Only a ``200`` carries
+        data. Returns the parsed response, or ``None`` when there is none.
         """
         token = self._require_token()
         url = const.GWEB_ACCESS_BASE + const.EP_GWEB_ACCESS_SHARING
@@ -646,12 +649,18 @@ class CentsysRemoteClient:
             url,
             op="GetAccessesByUserNumber",
             bearer=token,
-            json_body={"UserNumber": self.mobile_number},
+            json_body={"Number": self.mobile_number},
             content_type="application/json",
-            # 404 = no shared accesses for this number; a normal empty result.
-            expected_status=(200, 404),
+            # 400/404 = no shared access for this number; a normal empty result,
+            # kept out of the warning path (see docstring).
+            expected_status=(200, 400, 404),
         )
-        if status == 404:
+        if status != 200:
+            _LOGGER.debug(
+                "[GetAccessesByUserNumber] no shared access (HTTP %s, %d bytes)",
+                status,
+                len(text),
+            )
             return None
         return self._parse_json(text)
 
@@ -740,27 +749,28 @@ class CentsysRemoteClient:
 
     # -- gate control ------------------------------------------------------
 
-    async def open_gate(
+    async def send_activation(
         self,
         serial: str,
         *,
         mac: str | bytes,
-        is_garage: bool = False,
-        activation_id: int | None = None,
+        activation_id: int,
         au: bool = False,
         timeout: float = 8.0,
     ) -> bool:
-        """Trigger (open) the gate over MQTT.
+        """Run the MQTT activation handshake for one operator.
 
-        Fetches the per-session client certificate, connects to the broker as
-        MQTT v5 with clientId ``mcr:<number>`` and runs the challenge-response
-        handshake (see ``mqtt_remote``). Returns True if the gate acknowledged.
+        The single path for every operator action (open, pedestrian, Holiday
+        Lock, Keep Open ...). Fetches the per-session client certificate,
+        connects to the broker as MQTT v5 with clientId ``mcr:<number>`` and runs
+        the challenge-response handshake (see ``mqtt_remote``). Returns True if
+        the operator acknowledged.
 
         ``serial`` must be the LONG operator serial (the MQTT topic prefix).
         ``mac`` is the operator's ``macAddress`` from the device listing, used to
-        build the per-operator trigger packets. ``is_garage`` selects the default
-        trigger activation (a telemetry-confirmed garage-door operator uses RUN,
-        everything else TRG). Pass ``activation_id`` to override (e.g. PED).
+        build the per-operator packets. ``activation_id`` selects the action (see
+        ``packets``); the caller is responsible for choosing one valid for the
+        operator's family.
 
         Runs the blocking MQTT handshake in a thread so it is safe to await.
         """
@@ -769,8 +779,6 @@ class CentsysRemoteClient:
         mac4 = packets.parse_mac(mac)
         cmd01 = packets.build_cmd01(self.mobile_number, mac4)
         cmd05 = packets.build_cmd05(mac4)
-        if activation_id is None:
-            activation_id = packets.trigger_activation_id(is_garage=is_garage)
 
         cert_pem, key_pem, client_id, host = await self._mqtt_session(au=au)
 
@@ -792,31 +800,29 @@ class CentsysRemoteClient:
             ),
         )
 
-    async def toggle_holiday_lock(
+    async def open_gate(
         self,
         serial: str,
         *,
         mac: str | bytes,
+        is_garage: bool = False,
+        activation_id: int | None = None,
         au: bool = False,
         timeout: float = 8.0,
     ) -> bool:
-        """Toggle Holiday Lock on a gate operator. Returns True if acknowledged.
+        """Trigger (open) the gate over MQTT. Returns True if acknowledged.
 
-        Uses the same MQTT handshake as :meth:`open_gate` with the Holiday Lock
-        activation, which both sets and clears the lock.
-
-        The caller MUST have established that this operator is not a garage
-        door: the same activation id opens a garage (see
-        ``packets.ACTIVATION_HOLIDAY_LOCK``).
+        ``is_garage`` selects the default trigger activation (a telemetry- or
+        product-code-confirmed garage-door operator uses RUN, everything else
+        TRG). Pass ``activation_id`` to override (e.g. PED). Thin wrapper around
+        :meth:`send_activation`.
         """
         from . import packets
 
-        return await self.open_gate(
-            serial,
-            mac=mac,
-            activation_id=packets.ACTIVATION_HOLIDAY_LOCK,
-            au=au,
-            timeout=timeout,
+        if activation_id is None:
+            activation_id = packets.trigger_activation_id(is_garage=is_garage)
+        return await self.send_activation(
+            serial, mac=mac, activation_id=activation_id, au=au, timeout=timeout
         )
 
     def _wake_packet(self, mac: str | bytes | None) -> bytes:

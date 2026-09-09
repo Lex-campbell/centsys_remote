@@ -78,7 +78,17 @@ SENSORS: tuple[CentsysSensorDescription, ...] = (
         key="operator_status",
         translation_key="operator_status",
         device_class=SensorDeviceClass.ENUM,
-        options=["unknown", "open", "closed", "partly_open", "partly_closed", "opening", "closing"],
+        options=[
+            "unknown",
+            "open",
+            "closed",
+            "partly_open",
+            "partly_closed",
+            "opening",
+            "closing",
+            "learn",
+            "lost",
+        ],
         value_fn=_operator_status,
     ),
     CentsysSensorDescription(
@@ -125,6 +135,13 @@ SENSORS: tuple[CentsysSensorDescription, ...] = (
         translation_key="product_type",
         entity_category=EntityCategory.DIAGNOSTIC,
         value_fn=lambda data: data["device"].product_type,
+    ),
+    CentsysSensorDescription(
+        key="product_code",
+        translation_key="product_code",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data["device"].product_code,
     ),
     CentsysSensorDescription(
         key="wifi_rssi",

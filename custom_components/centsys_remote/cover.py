@@ -107,10 +107,9 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
                 "the trigger packet."
             )
         # RUN must only ever go to a confirmed garage: on a gate the same
-        # activation triggers Holiday Lock. An operator we can't read falls back
-        # to TRG, which is the safe default for anything that isn't a garage.
-        overview = await self._read_overview(mac)
-        is_garage = bool(overview and overview.is_garage)
+        # activation triggers Holiday Lock. Anything not positively a garage
+        # (including an operator we can't classify) falls back to the safe TRG.
+        is_garage = await self._resolve_family(mac) == "garage"
         try:
             ok = await self.coordinator.client.open_gate(
                 self._serial,

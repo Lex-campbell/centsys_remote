@@ -75,6 +75,15 @@ class Device:
             raw=data,
         )
 
+    @property
+    def product_family(self) -> str | None:
+        """"slider", "swing" or "garage" from the product code, or None.
+
+        Uses ``productCode`` (not the unreliable ``productType``) so a garage can
+        be told from a gate even when live telemetry is unavailable.
+        """
+        return enums.product_family(self.product_code)
+
 
 def _pick(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
     """Return the first present key (case-tolerant) from a dict."""

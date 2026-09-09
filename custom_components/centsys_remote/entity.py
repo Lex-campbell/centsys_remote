@@ -88,6 +88,28 @@ class CentsysEntity(CoordinatorEntity[CentsysCoordinator]):
         self.coordinator.set_overview(self._serial, overview)
         return overview
 
+    async def _resolve_family(self, mac) -> str | None:
+        """Return "garage", "gate" or None for this operator.
+
+        Prefers the live telemetry frame, which is a direct observation of the
+        running operator; falls back to the product code the cloud reports for
+        it when telemetry can't be read. None means unknown, so a caller sends
+        the safe default (never the garage command) and withholds gate-only
+        controls.
+        """
+        overview = await self._read_overview(mac)
+        if overview is not None:
+            if overview.is_garage:
+                return "garage"
+            if overview.is_gate:
+                return "gate"
+        family = getattr((self._device_data or {}).get("device"), "product_family", None)
+        if family == "garage":
+            return "garage"
+        if family in ("slider", "swing"):
+            return "gate"
+        return None
+
     async def async_update(self) -> None:
         """Refresh on explicit request, including the slow MQTT telemetry.
 

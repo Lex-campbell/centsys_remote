@@ -56,6 +56,39 @@ class BeamStatus(IntEnum):
     IO_8K2ERR_BLE_SLEEP = 24
 
 
+# Operator families keyed by the ``productCode`` the cloud reports for a device
+# (distinct from the unreliable ``productType`` field, which must not be used to
+# choose an activation). The code is normalised before lookup.
+_SLIDER_PRODUCT_CODES = frozenset({34, 43, 44, 45})
+_SWING_PRODUCT_CODES = frozenset({25})
+_GARAGE_PRODUCT_CODES = frozenset({41})
+
+
+def product_family(code: int | None) -> str | None:
+    """Return "slider", "swing" or "garage" for a device's ``productCode``.
+
+    Returns None for a code we don't recognise, so callers fall back to live
+    telemetry (or the safe default) rather than guessing.
+    """
+    if code is None or code < 1:
+        return None
+    if code < 28:
+        internal = code
+    elif code == 34:
+        internal = 0
+    elif code <= 43:
+        internal = code + 2
+    else:
+        return None
+    if internal in _SLIDER_PRODUCT_CODES:
+        return "slider"
+    if internal in _SWING_PRODUCT_CODES:
+        return "swing"
+    if internal in _GARAGE_PRODUCT_CODES:
+        return "garage"
+    return None
+
+
 def _label(enum_cls: type[IntEnum], value: int | None) -> str | None:
     """Human-friendly lower_snake label for a raw int, or None if unmappable."""
     if value is None:

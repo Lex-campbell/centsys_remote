@@ -52,3 +52,9 @@ def test_holiday_lock_is_never_the_default_open() -> None:
     # A plain open must never resolve to the Holiday Lock / garage id on a gate.
     assert packets.trigger_activation_id() != packets.ACTIVATION_HOLIDAY_LOCK
     assert packets.trigger_activation_id(is_garage=False) == packets.ACTIVATION_TRG
+
+
+def test_keep_open_activation_id() -> None:
+    # Keep Open uses its own id on every family, distinct from the open ids.
+    assert packets.ACTIVATION_KEEP_OPEN == 4
+    assert packets.trigger_activation_id() != packets.ACTIVATION_KEEP_OPEN

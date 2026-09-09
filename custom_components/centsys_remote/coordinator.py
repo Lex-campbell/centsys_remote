@@ -17,7 +17,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import CentsysRemoteClient, SharedAccess
-from .api.exceptions import CentsysApiError, CentsysAuthError, CentsysError
+from .api.exceptions import CentsysAuthError, CentsysError
 from .const import (
     AIRTIME_POLL_ATTEMPTS,
     AIRTIME_POLL_INTERVAL,
@@ -333,19 +333,6 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         """
         try:
             shared = await self.client.get_shared_accesses()
-        except CentsysApiError as err:
-            # A 4xx here means the request shape/auth isn't right yet. The body
-            # is the backend's own validation message -- it names the fields it
-            # expects, which is exactly what's needed to add support -- so
-            # surface it, with this number redacted to honour the no-PII rule.
-            _LOGGER.info(
-                "Shared-access probe returned HTTP %s (expected until support is "
-                "added). The backend's response is logged below to reveal the "
-                "request it wants - please share it: %s",
-                err.status,
-                self._redact(err.body or "")[:1000],
-            )
-            return
         except Exception as err:  # noqa: BLE001 - purely diagnostic
             _LOGGER.debug("Shared-access diagnostic fetch failed: %s", err)
             return
@@ -388,6 +375,14 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 "level to help add support."
             )
         _LOGGER.debug("AccessSharing response: %s", _shape(shared))
+        # The full (redacted) body carries the site/action names and any
+        # operator identifiers needed to add control; log it so a tester can
+        # share it. This number is masked; skim before sharing regardless.
+        try:
+            body = self._redact(json.dumps(shared, ensure_ascii=False))
+        except (TypeError, ValueError):
+            body = self._redact(str(shared))
+        _LOGGER.debug("AccessSharing body (redacted): %s", body[:2000])
 
     async def _log_legacy_config(self) -> None:
         """Log the legacy GWeb device config (GSM/ULTRA devices show up here)."""

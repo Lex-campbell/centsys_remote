@@ -48,7 +48,15 @@
     "binary_sensor": {
       "online": { "name": "Online" },
       "fault": { "name": "Fault" },
-      "warranty_void": { "name": "Warranty void" }
+      "warranty_void": { "name": "Warranty void" },
+      "operator_problem": { "name": "Operator problem" },
+      "needs_relearn": { "name": "Needs re-learn" },
+      "motor_disconnected": { "name": "Motor disconnected" },
+      "collision": { "name": "Collision" },
+      "emergency_stop": { "name": "Emergency stop" },
+      "battery_service_required": { "name": "Battery service required" },
+      "safety_beam_fault": { "name": "Safety beam fault" },
+      "tamper_alarm_armed": { "name": "Tamper alarm armed" }
     },
     "sensor": {
       "operator_status": {
@@ -60,7 +68,9 @@
           "partly_open": "Partly open",
           "partly_closed": "Partly closed",
           "opening": "Opening",
-          "closing": "Closing"
+          "closing": "Closing",
+          "learn": "Learning",
+          "lost": "Origin lost"
         }
       },
       "theft_alarm_state": {
@@ -106,6 +116,7 @@
       },
       "last_seen": { "name": "Last seen" },
       "product_type": { "name": "Product type" },
+      "product_code": { "name": "Product code" },
       "wifi_rssi": { "name": "Wi-Fi signal" },
       "battery_voltage": { "name": "Battery voltage" },
       "operator_temperature": { "name": "Operator temperature" },
@@ -127,7 +138,8 @@
       "gsm_refresh_airtime": { "name": "Refresh airtime" }
     },
     "switch": {
-      "holiday_lock": { "name": "Holiday lock" }
+      "holiday_lock": { "name": "Holiday lock" },
+      "keep_open": { "name": "Keep open" }
     }
   }
 }

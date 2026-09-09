@@ -97,3 +97,103 @@ def test_short_body_is_rejected() -> None:
         pass
     else:  # pragma: no cover
         raise AssertionError("expected ValueError for a too-short body")
+
+
+def test_garage_learn_and_lost_status() -> None:
+    def _sdo(gate_st: int) -> bytes:
+        body = bytearray(24)
+        body[12] = gate_st
+        return _HEADER + bytes(body)
+
+    assert mqtt_remote.parse_device_overview(_sdo(6)).gate_status == "learn"
+    assert mqtt_remote.parse_device_overview(_sdo(7)).gate_status == "lost"
+
+
+# --- notification flags -------------------------------------------------------
+#
+# The two 32-bit words sit at body offsets 4-7 (low, bits 0-31) and 8-11 (high,
+# bits 32-63) for both the slider and swing layouts.
+
+
+def _slider(*, nf1: int = 0, nf2: int = 0, cond: int = 0x0A00) -> bytes:
+    body = bytearray(36)
+    body[0:2] = (1340).to_bytes(2, "little")
+    body[4:8] = (nf1 & 0xFFFFFFFF).to_bytes(4, "little")
+    body[8:12] = (nf2 & 0xFFFFFFFF).to_bytes(4, "little")
+    body[12:16] = (cond & 0xFFFFFFFF).to_bytes(4, "little")
+    body[22] = 1
+    return _HEADER + bytes(body)
+
+
+def _swing(*, nf1: int = 0, nf2: int = 0) -> bytes:
+    body = bytearray(38)
+    body[4:8] = (nf1 & 0xFFFFFFFF).to_bytes(4, "little")
+    body[8:12] = (nf2 & 0xFFFFFFFF).to_bytes(4, "little")
+    return _HEADER + bytes(body)
+
+
+def _garage(*, nf1: int = 0) -> bytes:
+    body = bytearray(24)
+    body[0:4] = (nf1 & 0xFFFFFFFF).to_bytes(4, "little")
+    body[12] = 3
+    return _HEADER + bytes(body)
+
+
+def test_notification_flag_packing_low_and_high_words() -> None:
+    # A bit in the low word keeps its number; a bit in the high word is +32.
+    assert mqtt_remote.parse_device_overview(_slider(nf1=1 << 7)).notification_flags >> 7 & 1
+    assert mqtt_remote.parse_device_overview(_slider(nf2=1 << 7)).notification_flags >> 39 & 1
+
+
+def test_slider_conditions_and_problem_rollup() -> None:
+    # "lost" is bit 24 (low word); it is a fault, so it is a problem.
+    ov = mqtt_remote.parse_device_overview(_slider(nf1=1 << 24))
+    assert "lost" in ov.active_conditions
+    assert "lost" in ov.problems
+    assert ov.has_condition("needs_relearn") is True
+
+
+def test_state_conditions_are_excluded_from_problems() -> None:
+    # Keep Open is bit 54 (high word, 54-32=22) and is a mode, not a fault.
+    ov = mqtt_remote.parse_device_overview(_slider(nf2=1 << 22))
+    assert ov.keep_open is True
+    assert "keep_open" in ov.active_conditions
+    assert "keep_open" not in ov.problems
+    # Tamper armed is bit 60 (high word, 28) -- also a state, not a problem.
+    ov = mqtt_remote.parse_device_overview(_slider(nf2=1 << 28))
+    assert ov.has_condition("tamper_alarm_armed") is True
+    assert not ov.problems
+
+
+def test_motor_disconnected_resolves_per_family() -> None:
+    # Slider: single bit 22. Swing: the master/slave bits (28/29) both count.
+    assert mqtt_remote.parse_device_overview(_slider(nf1=1 << 22)).has_condition(
+        "motor_disconnected"
+    )
+    assert mqtt_remote.parse_device_overview(_swing(nf1=1 << 28)).has_condition(
+        "motor_disconnected"
+    )
+    assert mqtt_remote.parse_device_overview(_swing(nf1=1 << 29)).has_condition(
+        "motor_disconnected"
+    )
+
+
+def test_inapplicable_group_returns_none() -> None:
+    # Swing operators have no tamper-armed bit, and a garage has no motor bit,
+    # so those groups are "unknown" (None), not a misleading False.
+    assert mqtt_remote.parse_device_overview(_swing()).has_condition("tamper_alarm_armed") is None
+    assert mqtt_remote.parse_device_overview(_garage()).has_condition("motor_disconnected") is None
+
+
+def test_sys_tp_urc_style_strict_parsing_rejects_unknown_length() -> None:
+    # An unrecognised length on the multiplexed topic must be dropped by strict
+    # parsing rather than force-decoded with the nearest layout (which is what
+    # the lenient default does, and would corrupt the family signal).
+    other = _HEADER + bytes(40)  # not a known layout, but long enough to decode
+    assert mqtt_remote.parse_device_overview(other).family == "vx"  # lenient fallback
+    try:
+        mqtt_remote.parse_device_overview(other, strict=True)
+    except ValueError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("strict parsing should reject an unknown length")

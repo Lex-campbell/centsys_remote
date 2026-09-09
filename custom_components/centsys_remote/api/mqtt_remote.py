@@ -75,13 +75,13 @@ def configure_mqtt_tls(client, *, certfile: str, keyfile: str) -> None:
 # bytes are a header; the rest is a packed, little-endian struct whose shape
 # depends on the operator family:
 #
-#   * Slider-Plus operators (e.g. D5 Evo)  -> INFRATP_OVERVIEW_V2   (36 bytes)
-#   * other "...Plus" gate operators        -> INFRATP_OVERVIEW_VX   (38 bytes)
-#   * garage-door operators                 -> APPMOBILE_STATUS_..V3 (24 bytes)
+#   * sliding-gate operators (e.g. D5 Evo)  -> 36-byte body
+#   * other gate operators                  -> 38-byte body
+#   * garage-door operators                 -> 24-byte body
 #
 # We auto-detect by the post-header length (see ``_BODY_LAYOUTS``) and decode the
 # fields below. Two further lengths are seen in the field: 52 bytes (a separate
-# product line, reported as "vx52") and 64 bytes (a padded v2 frame).
+# product line, reported as "vx52") and 64 bytes (a padded 36-byte frame).
 
 # Slider/swing operators.
 _GATE_STATUS = {
@@ -99,6 +99,8 @@ _SDO_GATE_STATUS = {
     3: "closed",
     4: "closing",
     5: "partly_open",
+    6: "learn",
+    7: "lost",
 }
 _POWER_STATUS = {0: "normal", 1: "low", 2: "unknown", 3: "psu_comms_off"}
 
@@ -116,7 +118,7 @@ GATE_FAMILIES = frozenset({"v2", "vx", "vx52"})
 
 
 def _beam_label(value: int) -> str:
-    """Collapse an APPBEAM_DISPLAY value to a simple beam condition."""
+    """Collapse the operator's raw beam-status value to a simple condition."""
     if value == 0:
         return "disabled"
     if value == 1:
@@ -132,6 +134,124 @@ def _beam_label(value: int) -> str:
     if 16 <= value <= 20:
         return "wiring_error"
     return "unknown"
+
+
+# Per-family ``notification_flags`` bit -> condition name. The same bit means
+# different things on different operator families, so each has its own table;
+# condition names are functional (what the operator reports), not identifiers,
+# and only the meaningful conditions are mapped. A name shared across families
+# lets the groups below span all of them with a single definition.
+_SLIDER_CONDITIONS: dict[int, str] = {
+    0: "on_battery",
+    5: "mains_low",
+    7: "collision",
+    19: "opening_beam_test_fail",
+    20: "closing_beam_test_fail",
+    21: "gate_stalled",
+    22: "motor_disconnected",
+    23: "max_collisions",
+    24: "lost",
+    25: "emergency_stop",
+    26: "limits_not_set",
+    28: "replace_battery",
+    30: "origin_config_fault",
+    35: "temperature_warning",
+    38: "tamper_alarm",
+    41: "origin_fault",
+    42: "tamper_fault",
+    43: "controller_unclipped",
+    45: "no_batteries",
+    49: "power_supply_fault",
+    51: "photons_disconnected",
+    54: "keep_open",
+    56: "multiple_stall_events",
+    58: "photon_battery_low",
+    60: "tamper_alarm_armed",
+}
+_SWING_CONDITIONS: dict[int, str] = {
+    1: "mains_low",
+    2: "power_supply_fault",
+    4: "replace_battery",
+    5: "no_batteries",
+    15: "collision",
+    16: "collision",
+    17: "max_collisions",
+    18: "gate_stalled",
+    19: "gate_stalled",
+    20: "lost",
+    21: "limits_not_set",
+    27: "temperature_warning",
+    28: "motor_disconnected",
+    29: "motor_disconnected",
+    30: "emergency_stop",
+    32: "opening_beam_test_fail",
+    33: "closing_beam_test_fail",
+    37: "photons_disconnected",
+    38: "photon_battery_low",
+    39: "keep_open",
+}
+_GARAGE_CONDITIONS: dict[int, str] = {
+    0: "collision",
+    5: "max_collisions",
+    6: "power_low",
+    7: "drive_fault",
+    9: "low_battery",
+    10: "lost",
+    11: "limits_not_set",
+    13: "user_stop",
+    14: "tamper_alarm",
+    16: "on_battery",
+    17: "beams_error",
+    19: "vacation_mode",
+    20: "keep_open",
+    21: "low_battery_preventing_motion",
+    22: "batteries_damaged",
+    23: "no_batteries",
+    24: "mains_low",
+}
+_CONDITIONS_BY_FAMILY: dict[str, dict[int, str]] = {
+    "v2": _SLIDER_CONDITIONS,
+    "vx": _SWING_CONDITIONS,
+    "vx52": _SWING_CONDITIONS,
+    "sdo5": _GARAGE_CONDITIONS,
+}
+
+# Conditions that report a mode the operator is in rather than a fault needing
+# attention. Excluded from the problem roll-up. (Mains/battery power is already
+# reported by the power and battery sensors, so it counts as state here too.)
+_STATE_CONDITIONS = frozenset(
+    {
+        "holiday_lock",
+        "keep_open",
+        "vacation_mode",
+        "tamper_alarm_armed",
+        "mains_low",
+        "on_battery",
+        "power_low",
+        "low_battery",
+    }
+)
+
+# Named groups surfaced as their own diagnostics. Defined as sets of condition
+# names (not bit numbers) so one definition covers every family even where the
+# underlying bit differs.
+_CONDITION_GROUPS: dict[str, frozenset[str]] = {
+    "needs_relearn": frozenset(
+        {"lost", "limits_not_set", "origin_fault", "origin_config_fault"}
+    ),
+    "motor_disconnected": frozenset({"motor_disconnected"}),
+    "collision": frozenset(
+        {"collision", "max_collisions", "gate_stalled", "multiple_stall_events"}
+    ),
+    "emergency_stop": frozenset({"emergency_stop", "user_stop"}),
+    "battery_service_required": frozenset(
+        {"replace_battery", "no_batteries", "batteries_damaged", "low_battery_preventing_motion"}
+    ),
+    "safety_beam_fault": frozenset(
+        {"opening_beam_test_fail", "closing_beam_test_fail", "beams_error"}
+    ),
+    "tamper_alarm_armed": frozenset({"tamper_alarm_armed"}),
+}
 
 
 @dataclass
@@ -154,7 +274,9 @@ class DeviceOverview:
     closing_beam_raw: int
     seconds_remaining: int
     gate_position: int | None  # percent, slider-only
-    notification_flags: int  # (flags1 << 32) | flags2
+    # Two 32-bit words, low word first: bits 0-31 come from the first word and
+    # bits 32-63 from the second, matching how the operator numbers them.
+    notification_flags: int
     condition_flags: int
 
     def as_dict(self) -> dict:
@@ -179,6 +301,38 @@ class DeviceOverview:
         """
         return self.family in GATE_FAMILIES
 
+    @property
+    def active_conditions(self) -> tuple[str, ...]:
+        """Names of every condition the operator is currently reporting."""
+        table = _CONDITIONS_BY_FAMILY.get(self.family, {})
+        flags = self.notification_flags
+        return tuple(
+            sorted({name for bit, name in table.items() if flags >> bit & 1})
+        )
+
+    @property
+    def problems(self) -> tuple[str, ...]:
+        """Active conditions that indicate a fault needing attention."""
+        return tuple(c for c in self.active_conditions if c not in _STATE_CONDITIONS)
+
+    @property
+    def keep_open(self) -> bool:
+        """Whether the operator is currently holding the gate open."""
+        return "keep_open" in self.active_conditions
+
+    def has_condition(self, group: str) -> bool | None:
+        """Whether any condition in a named group is active.
+
+        Returns None when the group does not apply to this operator (none of its
+        conditions exist for this family), so a caller can report "unknown"
+        rather than a misleading "no".
+        """
+        names = _CONDITION_GROUPS.get(group, frozenset())
+        applicable = names & set(_CONDITIONS_BY_FAMILY.get(self.family, {}).values())
+        if not applicable:
+            return None
+        return bool(applicable & set(self.active_conditions))
+
 
 # Known ``deviceOverview`` body lengths -> (struct layout, family label).
 #
@@ -196,16 +350,20 @@ _BODY_LAYOUTS: dict[int, tuple[str, str]] = {
 }
 
 
-def _layout_for(length: int) -> tuple[str, str]:
+def _layout_for(length: int, *, strict: bool = False) -> tuple[str, str]:
     """Return the (struct layout, family) to decode a body of this length.
 
     An unknown length is decoded with the nearest known layout rather than
     dropped: the flag/timer block is shared across the gate families, so the
-    useful fields still land even on an operator we haven't catalogued.
+    useful fields still land even on an operator we haven't catalogued. When
+    ``strict`` is set an unknown length raises instead -- used on a multiplexed
+    topic where non-telemetry messages must not be force-decoded as a frame.
     """
     known = _BODY_LAYOUTS.get(length)
     if known is not None:
         return known
+    if strict:
+        raise ValueError(f"unrecognized deviceOverview body length: {length} bytes")
     if length < 24:
         raise ValueError(f"deviceOverview too short: {length} bytes")
     layout = "sdo5" if length < 36 else ("v2" if length < 38 else "vx")
@@ -218,15 +376,18 @@ def _layout_for(length: int) -> tuple[str, str]:
     return layout, layout
 
 
-def parse_device_overview(payload: bytes) -> DeviceOverview:
+def parse_device_overview(payload: bytes, *, strict: bool = False) -> DeviceOverview:
     """Decode a raw deviceOverview MQTT payload into structured telemetry.
 
     ``payload`` is the full MQTT payload; the leading 4-byte header is stripped
-    here (matching the app). Raises ValueError if the body is too short to decode.
+    here (matching the app). Raises ValueError if the body length is unusable --
+    with ``strict`` any length that isn't an exact known layout (see
+    ``_layout_for``), used when reading a topic that also carries non-telemetry
+    messages.
     """
     body = bytes(payload)[4:]
     n = len(body)
-    layout, family = _layout_for(n)
+    layout, family = _layout_for(n, strict=strict)
 
     if layout == "v2":
         (
@@ -293,7 +454,7 @@ def parse_device_overview(payload: bytes) -> DeviceOverview:
         closing_beam_raw=irbc,
         seconds_remaining=secs,
         gate_position=gate_position,
-        notification_flags=(nf1 << 32) | nf2,
+        notification_flags=(nf2 << 32) | nf1,
         condition_flags=cond,
     )
 
@@ -510,13 +671,15 @@ def follow_overview_blocking(
     t_trig = f"{serial}/userRemoteTrigger"
     t_trig_resp = f"{serial}/userRemoteTriggerResponse"
     t_overview = f"{serial}/deviceOverview"
+    # Secondary telemetry topic, multiplexed -> parsed strictly (see fetch).
+    t_sysurc = f"{serial}/sysTpUrc"
     t_disc = f"{serial}/disconnect"
 
     subscribed = threading.Event()
     conn_resp = threading.Event()
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
-        client.subscribe([(t_req_resp, 0), (t_trig_resp, 0), (t_overview, 0)])
+        client.subscribe([(t_req_resp, 0), (t_trig_resp, 0), (t_overview, 0), (t_sysurc, 0)])
 
     def on_subscribe(client, userdata, mid, reason_codes, properties=None):
         subscribed.set()
@@ -524,9 +687,9 @@ def follow_overview_blocking(
     def on_message(client, userdata, msg):
         if msg.topic == t_req_resp:
             conn_resp.set()
-        elif msg.topic == t_overview and msg.payload:
+        elif msg.topic in (t_overview, t_sysurc) and msg.payload:
             try:
-                ov = parse_device_overview(msg.payload)
+                ov = parse_device_overview(msg.payload, strict=msg.topic == t_sysurc)
             except ValueError:
                 return
             try:
@@ -627,15 +790,19 @@ def fetch_overview_blocking(
     t_trig = f"{serial}/userRemoteTrigger"
     t_trig_resp = f"{serial}/userRemoteTriggerResponse"
     t_overview = f"{serial}/deviceOverview"
+    # Some operators publish their telemetry only on this secondary topic. It is
+    # multiplexed (it also carries non-telemetry messages), so it is parsed
+    # strictly and anything that isn't a known frame is ignored.
+    t_sysurc = f"{serial}/sysTpUrc"
     t_disc = f"{serial}/disconnect"
 
     subscribed = threading.Event()
     conn_resp = threading.Event()
     got_overview = threading.Event()
-    holder: dict[str, bytes] = {}
+    holder: dict[str, DeviceOverview] = {}
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
-        client.subscribe([(t_req_resp, 0), (t_trig_resp, 0), (t_overview, 0)])
+        client.subscribe([(t_req_resp, 0), (t_trig_resp, 0), (t_overview, 0), (t_sysurc, 0)])
 
     def on_subscribe(client, userdata, mid, reason_codes, properties=None):
         subscribed.set()
@@ -643,9 +810,13 @@ def fetch_overview_blocking(
     def on_message(client, userdata, msg):
         if msg.topic == t_req_resp:
             conn_resp.set()
-        elif msg.topic == t_overview and msg.payload:
-            _LOGGER.debug("MQTT <- %s (%dB)", msg.topic, len(msg.payload))
-            holder["payload"] = msg.payload
+        elif msg.topic in (t_overview, t_sysurc) and msg.payload:
+            try:
+                holder["overview"] = parse_device_overview(
+                    msg.payload, strict=msg.topic == t_sysurc
+                )
+            except ValueError:
+                return
             got_overview.set()
 
     def props() -> "Properties":
@@ -693,11 +864,7 @@ def fetch_overview_blocking(
         if not got_overview.wait(timeout):
             _LOGGER.warning("MQTT overview: no deviceOverview received (gate asleep?)")
             return None
-        try:
-            return parse_device_overview(holder["payload"])
-        except ValueError as err:
-            _LOGGER.warning("MQTT overview: %s", err)
-            return None
+        return holder.get("overview")
     finally:
         try:
             client.publish(t_disc, b"", qos=0, properties=props())
