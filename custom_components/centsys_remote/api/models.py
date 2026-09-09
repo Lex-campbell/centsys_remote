@@ -5,9 +5,11 @@ Field names mirror the JSON keys returned by the backend.
 
 from __future__ import annotations
 
+import json
 import re
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from . import enums
@@ -373,73 +375,228 @@ class GsmDeviceStatus:
         )
 
 
+# ShareDeviceTypeEnum (from the app): 0 None, 1 Ultra, 2 Smart. Only Ultra needs
+# naming (it selects the trigger id); Smart is simply "not Ultra".
+SHARE_DEVICE_ULTRA = 1
+
+# The main open/close action is surfaced as the gate cover rather than a button.
+# Its ``Name`` is not stable (sometimes the i18n key "OpenCloseDescription",
+# sometimes the resolved label "Open/Close"), so match on the stable TRG
+# activation id and keep the names only as a fallback.
+_GATE_TRIGGER_ID = 34  # packets.ACTIVATION_TRG
+_GATE_ACTION_NAMES = ("OpenCloseDescription", "Open/Close")
+
+
+def _parse_utc(value: Any) -> "datetime | None":
+    """Parse a backend UTC timestamp string into an aware datetime, or None."""
+    if not value or not isinstance(value, str):
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
 @dataclass
 class SharedAction:
-    """A single triggerable action within a shared-access site.
+    """A single triggerable action ("activation") within a shared-access site.
 
-    Field names are parsed defensively from the AccessSharing response, whose
-    exact shape is still being characterised from live traffic.
+    Parsed from an entry of ``serializedSharedAccessPayload.Activations``. The
+    action is triggered server-side via ``SendActivation`` using ``trigger_id``
+    (SMART operators) or ``io_number`` (GSM/ULTRA operators).
     """
 
-    name: str = ""
-    action_id: int | str | None = None
-    serial_number: str | None = None
-    mac_address: str | None = None
-    device_id: int | str | None = None
+    id: int = 0
+    name: str = ""  # i18n key, e.g. "OpenCloseDescription", "PedestrianDescription"
+    trigger_id: int = 0
+    io_number: int = 0
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "SharedAction":
         return cls(
-            name=str(
-                _pick(data, "ActionName", "Name", "IOName", "CommandName", default="")
-                or ""
-            ),
-            action_id=_pick(data, "ActionId", "Id", "IONumber", "TriggerId", "ActivationId"),
-            serial_number=_pick(
-                data, "DeviceSerialNumber", "SerialNumber", "OperatorSerialNumber"
-            ),
-            mac_address=_pick(data, "DeviceMacAddress", "MacAddress"),
-            device_id=_pick(data, "DeviceId", "DEVICE_ID"),
+            id=int(_pick(data, "Id", default=0) or 0),
+            name=str(_pick(data, "Name", default="") or ""),
+            trigger_id=int(_pick(data, "TriggerId", default=0) or 0),
+            io_number=int(_pick(data, "IONumber", "IoNumber", default=0) or 0),
             raw=data,
         )
+
+    @property
+    def is_gate(self) -> bool:
+        """Whether this is the main open/close action (surfaced as the cover)."""
+        return self.trigger_id == _GATE_TRIGGER_ID or self.name in _GATE_ACTION_NAMES
 
 
 @dataclass
 class SharedAccess:
     """A community / shared-access "site" granted to this number (AccessSharing).
 
-    A shared access is a gate the user does not own but may trigger, typically
-    exposing one or more :class:`SharedAction` (e.g. *Main Gate*, *Pedestrian
-    Gate* on a residential estate). The AccessSharing response shape is still
-    being characterised, so parsing is defensive.
+    A gate the user does not own but may trigger, exposing one or more
+    :class:`SharedAction` (e.g. *Gate*, *Pedestrian*). Discovered via
+    ``GetAccessesByUserNumber`` and triggered server-side via ``SendActivation``
+    -- no MQTT or operator certificate is involved.
     """
 
-    access_guid: str | None = None
-    name: str = ""
-    access_type: int | str | None = None
-    revoked: bool | None = None
+    guid: str = ""
+    device_name: str = ""
+    share_device_type: int | None = None
+    revoked: bool = False
+    revoked_by_admin: bool = False
+    start_time_utc: str | None = None
+    end_time_utc: str | None = None
+    maximum_trigger_count: int | None = None
+    ultra_device_id: int | None = None
+    smart_serial_number: str | None = None
+    last_modified_utc: str | None = None
+    owner_number: str | None = None
     actions: list[SharedAction] = field(default_factory=list)
+    users: list[dict[str, Any]] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
     def key(self) -> str:
         """Stable id for this shared access within coordinator data / entities."""
-        return f"shared-{self.access_guid or self.name}"
+        return f"shared-{self.guid or self.device_name}"
+
+    @property
+    def is_ultra(self) -> bool:
+        return self.share_device_type == SHARE_DEVICE_ULTRA or (
+            self.ultra_device_id is not None
+        )
+
+    @property
+    def is_wifi(self) -> bool:
+        return not self.is_ultra
+
+    @property
+    def gate_action(self) -> SharedAction | None:
+        """The main open/close action, surfaced as the cover (or None)."""
+        return next((a for a in self.actions if a.is_gate), None)
+
+    @property
+    def button_actions(self) -> list[SharedAction]:
+        """Every non-gate action, surfaced as buttons."""
+        return [a for a in self.actions if not a.is_gate]
+
+    def action_by_id(self, action_id: int) -> SharedAction | None:
+        return next((a for a in self.actions if a.id == action_id), None)
+
+    @staticmethod
+    def _same_number(a: str | None, b: str | None) -> bool:
+        da = re.sub(r"\D", "", a or "")
+        db = re.sub(r"\D", "", b or "")
+        return bool(da and db and da == db)
+
+    def is_owned_by(self, number: str | None) -> bool:
+        """Whether ``number`` is the share's owner.
+
+        The owner controls this gate directly (it is in ``GetDevices``), so we
+        don't surface a shared entity for it -- that would double it up and
+        collide with the recipient's copy in a multi-account setup.
+        """
+        return self._same_number(number, self.owner_number)
+
+    def _user(self, number: str | None) -> dict[str, Any] | None:
+        """The user entry for ``number`` (digit-compared), if present."""
+        target = re.sub(r"\D", "", number or "")
+        if not target:
+            return None
+        for entry in self.users:
+            usr = entry.get("user") or {}
+            if self._same_number(usr.get("number") or entry.get("number"), target):
+                return entry
+        return None
+
+    def user_last_modified_utc(self, number: str | None) -> str | None:
+        entry = self._user(number)
+        return (entry.get("user") or {}).get("lastModifiedDateUtc") if entry else None
+
+    def remaining_triggers(self, number: str | None) -> int | None:
+        """Triggers left for ``number`` (None when the share has no limit)."""
+        if not self.maximum_trigger_count:
+            return None
+        entry = self._user(number)
+        used = int((entry or {}).get("currentTriggerCount") or 0)
+        return max(0, self.maximum_trigger_count - used)
+
+    @property
+    def expiry(self) -> "datetime | None":
+        """The share's end time as an aware datetime, or None if open-ended."""
+        return _parse_utc(self.end_time_utc)
+
+    def is_available(self, number: str | None, *, now: "datetime | None" = None) -> bool:
+        """Whether this number may currently trigger the share.
+
+        Gated on concrete fields only (revoked, time window, remaining triggers)
+        rather than the share's ``Type`` enum (whose values we don't map), so a
+        working share is never hidden by a misread type.
+        """
+        if self.revoked or self.revoked_by_admin:
+            return False
+        now = now or datetime.now(timezone.utc)
+        start = _parse_utc(self.start_time_utc)
+        end = _parse_utc(self.end_time_utc)
+        if start and now < start:
+            return False
+        if end and now > end:
+            return False
+        remaining = self.remaining_triggers(number)
+        if remaining is not None and remaining <= 0:
+            return False
+        return True
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "SharedAccess":
-        actions_raw = _pick(data, "Actions", "Activations", "IOConfigs", default=[]) or []
+        # The operator + activations live inside a nested JSON *string*.
+        payload = _pick(data, "SerializedSharedAccessPayload", default=None)
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (json.JSONDecodeError, ValueError):
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        activations = _pick(payload, "Activations", default=[]) or []
+        users = _pick(data, "Users", default=[]) or []
+        owner = _pick(data, "Owner", default={}) or {}
+        owner_user = _pick(owner, "User", default={}) if isinstance(owner, dict) else {}
         return cls(
-            access_guid=_pick(data, "AccessGuid", "AccessShareId", "Guid"),
-            name=str(_pick(data, "DeviceName", "SiteName", "Name", default="") or ""),
-            access_type=_pick(data, "AccessType", "AccessShareType"),
-            revoked=_pick(data, "AccessRevoked", "Revoked"),
+            guid=str(_pick(data, "Guid", "AccessGuid", default="") or ""),
+            device_name=str(_pick(data, "DeviceName", "SiteName", "Name", default="") or ""),
+            share_device_type=_pick(data, "ShareDeviceType"),
+            revoked=bool(_pick(data, "AccessRevoked", "Revoked", default=False)),
+            revoked_by_admin=bool(_pick(data, "AccessRevokedByAdministrator", default=False)),
+            start_time_utc=_pick(data, "StartTimeUtc"),
+            end_time_utc=_pick(data, "EndTimeUtc"),
+            maximum_trigger_count=_pick(data, "MaximumTriggerCount"),
+            ultra_device_id=_pick(data, "UltraDeviceId"),
+            smart_serial_number=_pick(data, "SmartSerialNumber"),
+            last_modified_utc=_pick(data, "LastModifiedDateUtc"),
+            owner_number=_pick(owner_user, "Number") if isinstance(owner_user, dict) else None,
             actions=[
-                SharedAction.from_json(a) for a in actions_raw if isinstance(a, dict)
+                SharedAction.from_json(a) for a in activations if isinstance(a, dict)
             ],
+            users=[u for u in users if isinstance(u, dict)],
             raw=data,
         )
+
+
+def parse_shared_accesses(raw: Any) -> list[SharedAccess]:
+    """Parse a ``GetAccessesByUserNumber`` response into shared-access models."""
+    if isinstance(raw, dict):
+        items = _pick(raw, "SharedAccesses", default=None)
+        if items is None:
+            items = next((v for v in raw.values() if isinstance(v, list)), [])
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+    return [SharedAccess.from_json(x) for x in items if isinstance(x, dict)]
 
 
 @dataclass

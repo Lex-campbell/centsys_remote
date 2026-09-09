@@ -27,7 +27,12 @@ from homeassistant.util import dt as dt_util
 from .api.enums import BEAM_STATE_OPTIONS
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
-from .entity import CentsysEntity, CentsysGsmEntity, async_setup_dynamic_entities
+from .entity import (
+    CentsysEntity,
+    CentsysGsmEntity,
+    CentsysSharedEntity,
+    async_setup_dynamic_entities,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -268,10 +273,23 @@ async def async_setup_entry(
 
     def _factory(key: str):
         data = coordinator.data.get(key) or {}
-        if data.get("kind") == "gsm":
+        kind = data.get("kind")
+        if kind == "gsm":
             return [CentsysGsmSensor(coordinator, key, d) for d in GSM_SENSORS]
-        if data.get("kind") == "wifi":
+        if kind == "wifi":
             return [CentsysSensor(coordinator, key, d) for d in SENSORS]
+        if kind == "shared":
+            access = data.get("shared")
+            if access is None:
+                return []
+            sensors: list[SensorEntity] = []
+            # Only meaningful for limited shares; a permanent community gate has
+            # neither, so it gets no extra sensors.
+            if access.maximum_trigger_count:
+                sensors.append(CentsysSharedRemainingTriggersSensor(coordinator, key))
+            if access.end_time_utc:
+                sensors.append(CentsysSharedExpirySensor(coordinator, key))
+            return sensors
         return []
 
     async_setup_dynamic_entities(entry, coordinator, async_add_entities, _factory)
@@ -326,3 +344,51 @@ class CentsysGsmSensor(CentsysGsmEntity, SensorEntity):
         if not data:
             return None
         return self.entity_description.value_fn(data)
+
+
+class _CentsysSharedInfoSensor(CentsysSharedEntity, SensorEntity):
+    """Base for a shared-gate limit sensor.
+
+    Unlike the controls, these stay available even when the share is
+    expired/depleted, so the value explains *why* the gate went unavailable.
+    """
+
+    @property
+    def available(self) -> bool:
+        return bool(self.coordinator.last_update_success and self._access is not None)
+
+
+class CentsysSharedRemainingTriggersSensor(_CentsysSharedInfoSensor):
+    """How many triggers remain on a trigger-count-limited shared gate."""
+
+    _attr_icon = "mdi:counter"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: CentsysCoordinator, key: str) -> None:
+        super().__init__(coordinator, key)
+        self._attr_name = "Remaining triggers"
+        self._attr_unique_id = self._uid("remaining_triggers")
+
+    @property
+    def native_value(self) -> Any:
+        access = self._access
+        return access.remaining_triggers(self._number) if access else None
+
+
+class CentsysSharedExpirySensor(_CentsysSharedInfoSensor):
+    """When access to a time-limited shared gate expires."""
+
+    _attr_icon = "mdi:calendar-clock"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+
+    def __init__(self, coordinator: CentsysCoordinator, key: str) -> None:
+        super().__init__(coordinator, key)
+        self._attr_name = "Access expires"
+        self._attr_unique_id = self._uid("expires")
+
+    @property
+    def native_value(self) -> Any:
+        access = self._access
+        return access.expiry if access else None

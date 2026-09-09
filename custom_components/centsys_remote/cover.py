@@ -29,7 +29,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from .api.exceptions import CentsysCertExpiredError, CentsysError
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
-from .entity import CentsysEntity, CentsysGsmEntity, async_setup_dynamic_entities
+from .entity import (
+    CentsysEntity,
+    CentsysGsmEntity,
+    CentsysSharedEntity,
+    async_setup_dynamic_entities,
+)
 
 # How long / how often to re-poll a GSM operator's live IO states after a trigger.
 LIVE_FOLLOW_SECONDS = 75.0
@@ -45,8 +50,20 @@ async def async_setup_entry(
 
     def _factory(serial: str):
         data = coordinator.data.get(serial) or {}
-        if data.get("kind") == "gsm":
+        kind = data.get("kind")
+        if kind == "gsm":
             return [CentsysGsmGateCover(coordinator, serial)]
+        if kind == "shared":
+            access = data.get("shared")
+            # Only GSM/ULTRA shares are controllable (SMART shares are read-only,
+            # BLE-at-the-gate). A cover needs an open/close action to drive.
+            if (
+                access is not None
+                and access.is_ultra
+                and access.gate_action is not None
+            ):
+                return [CentsysSharedGateCover(coordinator, serial)]
+            return []
         return [CentsysGateCover(coordinator, serial)]
 
     async_setup_dynamic_entities(entry, coordinator, async_add_entities, _factory)
@@ -126,6 +143,47 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
             )
         await self.coordinator.async_request_refresh()
         self.coordinator.start_live_follow(self._serial)
+
+    async def async_open_cover(self, **kwargs) -> None:
+        await self._trigger()
+
+    async def async_close_cover(self, **kwargs) -> None:
+        await self._trigger()
+
+
+class CentsysSharedGateCover(CentsysSharedEntity, CoverEntity):
+    """A community / shared-access gate as an HA cover.
+
+    Triggered server-side via the AccessSharing ``SendActivation`` call (the
+    recipient has no operator certificate), so there is no live position: the
+    cover is ``assumed_state`` and both open and close send the gate action --
+    the operator decides direction, like the app's button.
+    """
+
+    _attr_device_class = CoverDeviceClass.GATE
+    _attr_supported_features = CoverEntityFeature.OPEN | CoverEntityFeature.CLOSE
+    _attr_assumed_state = True
+    _attr_name = None  # primary entity -> use the device (site) name
+
+    def __init__(self, coordinator: CentsysCoordinator, key: str) -> None:
+        super().__init__(coordinator, key)
+        self._attr_unique_id = self._uid("gate")
+
+    @property
+    def is_closed(self) -> bool | None:
+        # No telemetry for shared gates; leave state unknown (assumed_state
+        # keeps both open and close pressable).
+        return None
+
+    async def _trigger(self) -> None:
+        access = self._access
+        action = access.gate_action if access else None
+        if access is None or action is None:
+            raise HomeAssistantError("This shared gate is no longer available.")
+        try:
+            await self.coordinator.client.trigger_shared_action(access, action)
+        except CentsysError as err:
+            raise HomeAssistantError(f"Failed to trigger gate: {err}") from err
 
     async def async_open_cover(self, **kwargs) -> None:
         await self._trigger()

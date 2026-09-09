@@ -41,7 +41,11 @@
   "issues": {
     "no_gates_linked": {
       "title": "No gates linked to this number",
-      "description": "You're signed in, but no gates are linked to this phone number yet.\n\nOpen the **MyCentsys Remote** app and check that your gate appears there for this number. If it doesn't, the gate's admin needs to add your number as a **remote user** on the operator - a direct or Bluetooth-only connection isn't enough.\n\nOnce it's linked the gate appears here automatically within about a minute, and this notice clears itself. No restart needed.\n\n**Community or shared gate?** If your number instead has *shared access* to a community/estate site (it shows in the app as a site with actions like *Main Gate* or *Pedestrian Gate* rather than a gate you own), that isn't supported yet. Enabling debug logging captures details that help add support - please share them in a GitHub issue."
+      "description": "You're signed in, but no gates are linked to this phone number yet.\n\nOpen the **MyCentsys Remote** app and check that your gate appears there for this number. If it doesn't, the gate's admin needs to add your number as a **remote user** on the operator - a direct or Bluetooth-only connection isn't enough.\n\nOnce it's linked the gate appears here automatically within about a minute, and this notice clears itself. No restart needed.\n\n**Community or shared gate?** Gates *shared* with your number (a community/estate site with actions like *Main Gate* or *Pedestrian Gate*) now appear here automatically too. If one isn't showing, check in the app that it's still shared to **this exact number** - and that you picked the **same country** here as in the app, since the wrong country changes the number."
+    },
+    "shared_smart_readonly": {
+      "title": "Shared Wi-Fi gate is view-only",
+      "description": "A **Wi-Fi (SMART)** gate has been shared with your number, so Home Assistant shows its access details (when it expires, triggers left) - but it **can't open it**.\n\nUnlike a gate you own, a *shared* Wi-Fi gate is opened by the MyCentsys app over **Bluetooth while you're standing at the gate**; there's no remote way to trigger it, from Home Assistant or from the app when you're away. This is how Centurion shares Wi-Fi gates, not something you can change here.\n\n(If it's actually *your own* gate, add the integration again using the **owning** number instead - it'll then be fully controllable. Cellular **GSM/ULTRA** shared gates *are* controllable and aren't affected by this.)"
     }
   },
   "entity": {

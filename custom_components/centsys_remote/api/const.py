@@ -59,6 +59,8 @@ EP_GWEB_ADD_USER = "/api/AddOrUpdateRemotesUserUpdated/"          # smart.gweb
 EP_GWEB_BACKUP_META = "/api/RemotesAppBackup/GetLatestRemotesAppBackupMetaData"  # smart.gweb
 EP_GWEB_BACKUP = "/api/RemotesAppBackup/GetLatestRemotesAppBackup"  # smart.gweb
 EP_GWEB_ACCESS_SHARING = "/api/AccessSharing/GetAccessesByUserNumber"  # :4446
+EP_GWEB_ACTIVATION_SEND = "/api/Activation/SendActivation"  # :4446 (shared-gate trigger)
+EP_GWEB_ACTIVATION_RESULT = "/api/Activation/ActivationDeviceResult"  # :4446 (log/count)
 
 # --- Client identity ------------------------------------------------------
 

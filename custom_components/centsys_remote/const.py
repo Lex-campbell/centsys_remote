@@ -43,6 +43,10 @@ TELEMETRY_FORCE_MIN_INTERVAL = 30
 # cadence than the main cloud status to avoid extra round-trips every poll.
 GSM_SCAN_INTERVAL = 300
 
+# Community / shared-access (AccessSharing) sites change rarely (a share added or
+# revoked), so refresh them on the same slower cadence rather than every poll.
+SHARED_SCAN_INTERVAL = 300
+
 # After an on-demand airtime request, the operator queries its balance over the
 # cellular network and syncs back asynchronously, so poll the cached status a
 # few times to pick up the result.
@@ -56,4 +60,9 @@ MANUFACTURER = "Centurion Systems (Centsys)"
 # Linked from the "no gates linked" repair, which the user resolves in the app.
 NO_GATES_HELP_URL = (
     "https://github.com/lex-campbell/centsys_remote#requirements"
+)
+
+# Linked from the "shared Wi-Fi gate is read-only" repair (explains the BLE limit).
+SHARED_HELP_URL = (
+    "https://github.com/lex-campbell/centsys_remote#supported-devices"
 )

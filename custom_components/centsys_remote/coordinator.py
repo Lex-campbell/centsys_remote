@@ -16,8 +16,9 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import CentsysRemoteClient, SharedAccess
+from .api import CentsysRemoteClient
 from .api.exceptions import CentsysAuthError, CentsysError
+from .api.models import SharedAccess, parse_shared_accesses
 from .const import (
     AIRTIME_POLL_ATTEMPTS,
     AIRTIME_POLL_INTERVAL,
@@ -29,6 +30,8 @@ from .const import (
     LIVE_FOLLOW_SECONDS,
     LIVE_STATUS_TTL,
     NO_GATES_HELP_URL,
+    SHARED_HELP_URL,
+    SHARED_SCAN_INTERVAL,
     TELEMETRY_FORCE_MIN_INTERVAL,
     TELEMETRY_SCAN_INTERVAL,
 )
@@ -92,6 +95,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         # cycle reads MQTT telemetry instead of waiting for its slow cadence.
         self._force_telemetry = False
         self._no_devices_issue = f"no_devices_{entry.entry_id}"
+        self._shared_readonly_issue = f"shared_readonly_{entry.entry_id}"
         self._backup_diagnostic_done = False
         self._gsm_devices: list[Any] = []
         self._gsm_loaded = False
@@ -99,6 +103,11 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._gsm_status: dict[str, Any] = {}
         self._gsm_diag: dict[str, Any] = {}
         self._last_gsm_diag = 0.0
+        # Community / shared-access (AccessSharing) sites, refreshed on the slow
+        # cadence like GSM; the cached list is reused between refreshes.
+        self._shared: list[SharedAccess] = []
+        self._shared_loaded = False
+        self._last_shared = 0.0
         self._tasks: set[asyncio.Task] = set()
 
     def async_spawn(self, coro, *, name: str) -> None:
@@ -245,6 +254,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         await self._maybe_refresh_gsm()
         await self._refresh_gsm_status()
         await self._maybe_refresh_gsm_diag()
+        await self._maybe_refresh_shared()
 
         data: dict[str, dict[str, Any]] = {
             d.serial_number: {
@@ -266,16 +276,37 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 "live_status": self._live_status_label(gsm.key),
             }
 
+        has_readonly_shared = False
+        for shared in self._shared:
+            # Skip a share owned by this same account: the owner already has the
+            # gate via GetDevices, so surfacing it again would double it up (and
+            # collide with the recipient's copy in a multi-account HA).
+            if shared.is_owned_by(self.client.mobile_number):
+                continue
+            # A shared SMART (Wi-Fi) gate is opened by the app over Bluetooth at
+            # the gate, so HA can't drive it -- surface it read-only (share info
+            # only, no controls) and flag the limitation via a repair. GSM/ULTRA
+            # shares are triggered through the cellular gateway, so they are
+            # fully controllable. The entity factories key off ``is_ultra``.
+            data[shared.key] = {
+                "kind": "shared",
+                "shared": shared,
+            }
+            if not shared.is_ultra:
+                has_readonly_shared = True
+
         has_devices = bool(data)
         if not has_devices:
             await self._log_backup_diagnostic()
         self._update_no_devices_issue(has_devices)
+        self._update_shared_readonly_issue(has_readonly_shared)
 
         return data
 
     def dismiss_no_devices_issue(self) -> None:
-        """Clear the 'no gates linked' repair issue (e.g. on unload)."""
+        """Clear this integration's repair issues (e.g. on unload)."""
         ir.async_delete_issue(self.hass, DOMAIN, self._no_devices_issue)
+        ir.async_delete_issue(self.hass, DOMAIN, self._shared_readonly_issue)
 
     def _update_no_devices_issue(self, has_devices: bool) -> None:
         """Raise or clear the repair explaining an account with no linked gates.
@@ -297,92 +328,80 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             learn_more_url=NO_GATES_HELP_URL,
         )
 
+    def _update_shared_readonly_issue(self, has_readonly_shared: bool) -> None:
+        """Raise or clear the notice that a shared SMART gate is read-only.
+
+        A gate shared with this number over SMART/Wi-Fi can only be opened from
+        the app over Bluetooth at the gate, so HA shows its access details but
+        can't control it. This isn't user-fixable -- it's how Centurion shares
+        Wi-Fi gates -- so it's a non-fixable informational repair, matching the
+        ``no_gates_linked`` pattern. It clears itself if the share goes away.
+        """
+        if not has_readonly_shared:
+            ir.async_delete_issue(self.hass, DOMAIN, self._shared_readonly_issue)
+            return
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            self._shared_readonly_issue,
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="shared_smart_readonly",
+            learn_more_url=SHARED_HELP_URL,
+        )
+
     async def _log_backup_diagnostic(self) -> None:
         """Diagnose an account with no Wi-Fi gates (once per session).
 
         ``GetDevicesByRemoteUserNumber`` only returns SMART Wi-Fi operators
         where this number is a linked *remote user*. GSM/ULTRA units (and older
         non-Wi-Fi motors reached via an add-on module) live on the legacy GWeb
-        gateway instead, and community / shared-access "sites" live on the
-        AccessSharing backend. This probes all fallback sources and logs what
-        the backend holds, so a user can enable debug logging and share it.
+        gateway instead. This probes both fallback sources and logs what the
+        backend holds, so a user can enable debug logging and share it.
+        (Community / shared-access sites are handled by ``_maybe_refresh_shared``,
+        which runs every poll regardless of whether owned gates exist.)
         """
         if self._backup_diagnostic_done:
             return
         self._backup_diagnostic_done = True
         await self._log_legacy_config()
-        await self._log_shared_access()
         await self._log_gweb_backup()
 
-    def _redact(self, text: str) -> str:
-        """Mask this account's phone number in a string before it is logged."""
-        number = self.client.mobile_number or ""
-        digits = "".join(c for c in number if c.isdigit())
-        for token in (number, digits):
-            if token:
-                text = text.replace(token, "<number>")
-        return text
+    async def _maybe_refresh_shared(self) -> None:
+        """Refresh the community / shared-access (AccessSharing) sites.
 
-    async def _log_shared_access(self) -> None:
-        """Log any community / shared-access sites granted to this number.
-
-        These are gates the user does not own but may trigger (e.g. a shared
-        estate "site" exposing Main Gate / Pedestrian Gate actions). They are
-        returned by the AccessSharing backend, which the integration does not
-        yet control, so this surfaces what the backend holds to guide support.
+        Rate-limited to ``SHARED_SCAN_INTERVAL``; the cached list is reused
+        between refreshes and a failure keeps the previous value. Runs for every
+        account (not just empty ones), so a shared gate surfaces alongside any
+        owned or GSM gates.
         """
+        now = time.monotonic()
+        if self._shared_loaded and (now - self._last_shared) < SHARED_SCAN_INTERVAL:
+            return
+        self._last_shared = now
         try:
-            shared = await self.client.get_shared_accesses()
-        except Exception as err:  # noqa: BLE001 - purely diagnostic
-            _LOGGER.debug("Shared-access diagnostic fetch failed: %s", err)
+            raw = await self.client.get_shared_accesses()
+        except Exception as err:  # noqa: BLE001 - shared access is best-effort
+            _LOGGER.debug("Shared-access fetch failed: %s", err)
             return
 
-        if not shared:
-            _LOGGER.info("No community / shared-access sites for this number.")
+        self._shared = parse_shared_accesses(raw)
+        self._shared_loaded = True
+
+        if not self._shared:
+            _LOGGER.debug("No community / shared-access sites for this number.")
             return
 
-        # The response may be a bare list of sites or a dict wrapping one; pull
-        # out the first list of dicts so a site/action summary can be logged.
-        entries = shared
-        if isinstance(shared, dict):
-            entries = next(
-                (v for v in shared.values() if isinstance(v, list)),
-                [],
-            )
-        sites = (
-            [SharedAccess.from_json(s) for s in entries if isinstance(s, dict)]
-            if isinstance(entries, list)
-            else []
+        summary = ", ".join(
+            f"{s.device_name or s.guid or '?'} "
+            f"[{', '.join(a.name for a in s.actions) or 'no actions'}]"
+            for s in self._shared
         )
-
-        if sites:
-            summary = ", ".join(
-                f"{s.name or s.access_guid or '?'} "
-                f"[{', '.join(a.name for a in s.actions) or 'no actions'}]"
-                for s in sites
-            )
-            _LOGGER.info(
-                "This number has %d community / shared-access site(s): %s. These "
-                "are shared gates the integration does not control yet; the "
-                "response shape is logged at debug level to help add support.",
-                len(sites),
-                summary,
-            )
-        else:
-            _LOGGER.info(
-                "This number has community / shared-access data the integration "
-                "does not control yet; the response shape is logged at debug "
-                "level to help add support."
-            )
-        _LOGGER.debug("AccessSharing response: %s", _shape(shared))
-        # The full (redacted) body carries the site/action names and any
-        # operator identifiers needed to add control; log it so a tester can
-        # share it. This number is masked; skim before sharing regardless.
-        try:
-            body = self._redact(json.dumps(shared, ensure_ascii=False))
-        except (TypeError, ValueError):
-            body = self._redact(str(shared))
-        _LOGGER.debug("AccessSharing body (redacted): %s", body[:2000])
+        _LOGGER.debug(
+            "Found %d community / shared-access site(s): %s",
+            len(self._shared),
+            summary,
+        )
 
     async def _log_legacy_config(self) -> None:
         """Log the legacy GWeb device config (GSM/ULTRA devices show up here)."""

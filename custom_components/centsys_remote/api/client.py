@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
 
@@ -43,9 +44,29 @@ from .models import (
     GsmDeviceStatus,
     GsmStatus,
     OperatorStatus,
+    SharedAccess,
+    SharedAction,
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# AccessSharing ``ActionResponseEnum`` from the app: index -> meaning.
+ACTION_RESPONSE_SUCCESS = 1
+ACTION_RESPONSE_LABELS = {
+    0: "failed",
+    1: "success",
+    2: "access revoked",
+    3: "invalid device (IMEI)",
+    4: "access expired",
+    5: "communication failed",
+    6: "refresh required",
+    7: "access revoked by administrator",
+}
+
+# AccessSharing ``AccessLogResultEnum``; a successful open is reported as
+# ``Success`` (2, "ActionSent") to the access log, which is also what increments
+# a trigger-count share's counter server-side.
+ACCESS_LOG_RESULT_SUCCESS = 2
 
 
 def normalize_msisdn(number: str) -> str:
@@ -480,25 +501,30 @@ class CentsysRemoteClient:
         Successfully") and raises on a known failure state.
         """
         token = await self._require_gweb_token()
+        return await self._mcract_en(device_id, token, io_number)
 
-        # data = base64(deviceId) | base64(token) | base64(ioNumber), placed raw
-        # in the query string (the gateway decodes each base64 part itself).
-        parts = "|".join(
-            base64.b64encode(str(v).encode()).decode()
-            for v in (device_id, token, io_number)
-        )
+    async def _mcract_en(
+        self, device_id: int | str, identity: str, io_number: int | str
+    ) -> str:
+        """Fire the GWeb ``MCRActEn`` cellular trigger and decode its status.
+
+        ``data`` is ``base64(deviceId) | base64(identity) | base64(ioNumber)``.
+        ``identity`` is the caller's gweb token for an owned device, or the
+        account's number for a shared device (matching how the app addresses
+        each). Returns the gateway's success message or raises on a known
+        failure state.
+        """
         # encoded=True: send the base64 exactly as the app does, without letting
         # the HTTP layer percent-encode the '+', '/' and '=' characters.
+        parts = "|".join(
+            base64.b64encode(str(v).encode()).decode()
+            for v in (device_id, identity, io_number)
+        )
         url = URL(
             f"{const.GWEB_BASE}{const.EP_GWEB_ACTIVATE}?data={parts}",
             encoded=True,
         )
-        _, text = await self._request(
-            "GET",
-            url,
-            op="MCRActEn",
-            accept="*/*",
-        )
+        _, text = await self._request("GET", url, op="MCRActEn", accept="*/*")
         # Response is a JSON-ish quoted string; unwrap escapes and quotes.
         result = text.replace("\\", "").strip().strip('"')
 
@@ -663,6 +689,107 @@ class CentsysRemoteClient:
             )
             return None
         return self._parse_json(text)
+
+    async def trigger_shared_action(
+        self, access: "SharedAccess", action: "SharedAction"
+    ) -> None:
+        """Trigger one action on a shared-access gate.
+
+        Only GSM/ULTRA shared gates can be triggered remotely: the cellular
+        gateway relays the activation (``MCRActEn``). A shared SMART (Wi-Fi)
+        gate has no remote path -- it is opened locally over Bluetooth -- so we
+        refuse rather than fire a no-op that only notifies the owner.
+
+        The GSM flow has three steps: ``SendActivation`` (authorise, enforce
+        revoked/expired/count, notify the owner), ``MCRActEn`` (the actual
+        trigger, addressed by the account number), then ``ActivationDeviceResult``
+        (log the open and advance a trigger-count share). Raises
+        :class:`CentsysError` on a SMART gate or if the backend rejects it.
+        """
+        if not access.is_ultra:
+            raise CentsysError(
+                "A shared SMART/Wi-Fi gate can't be triggered remotely; the "
+                "app opens it over Bluetooth while at the gate."
+            )
+        token = self._require_token()
+        io_number = action.io_number
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+        # 1. Authorise via AccessSharing (notifies the owner, enforces limits).
+        body = {
+            "PreviousTrigger": None,
+            "AccessGuid": access.guid,
+            "Timestamp": timestamp,
+            "RequestingNumber": self.mobile_number,
+            "PhoneMacAddress": None,
+            "SharedAccessLastModifiedDateUtc": access.last_modified_utc,
+            "UserSharedAccessLastModifiedDateUtc": access.user_last_modified_utc(
+                self.mobile_number
+            ),
+            "TriggerId": io_number,
+            "TriggerName": action.name,
+        }
+        url = const.GWEB_ACCESS_BASE + const.EP_GWEB_ACTIVATION_SEND
+        _, text = await self._request(
+            "POST",
+            url,
+            op="SendActivation",
+            bearer=token,
+            json_body=body,
+            content_type="application/json",
+            # The service replies 200 (and occasionally 202) with a JSON body.
+            expected_status=(200, 202),
+        )
+        data = self._parse_json(text)
+        code = data.get("response") if isinstance(data, dict) else None
+        if code != ACTION_RESPONSE_SUCCESS:
+            raise CentsysError(
+                f"Shared gate rejected the trigger: "
+                f"{ACTION_RESPONSE_LABELS.get(code, code)}"
+            )
+
+        # 2. Fire the actual cellular trigger (addressed by number, as the app).
+        await self._mcract_en(access.ultra_device_id, self.mobile_number, io_number)
+
+        # 3. Record the open (access log + trigger-count advance).
+        await self._report_shared_result(access, action, io_number, timestamp, token)
+
+    async def _report_shared_result(
+        self,
+        access: "SharedAccess",
+        action: "SharedAction",
+        trigger_id: int,
+        timestamp: str,
+        token: str,
+    ) -> None:
+        """Report a successful shared trigger to the access log (best-effort).
+
+        Mirrors the app's ``ActivationDeviceResult`` call: it logs the open for
+        the owner and increments a trigger-count share's server-side counter.
+        The gate has already been triggered by this point, so a failure here is
+        logged but never surfaced to the caller.
+        """
+        body = {
+            "AccessGuid": access.guid,
+            "ActivationTimestampUtc": timestamp,
+            "RequestingNumber": self.mobile_number,
+            "TriggerId": trigger_id,
+            "TriggerName": action.name,
+            "Result": ACCESS_LOG_RESULT_SUCCESS,
+        }
+        url = const.GWEB_ACCESS_BASE + const.EP_GWEB_ACTIVATION_RESULT
+        try:
+            await self._request(
+                "POST",
+                url,
+                op="ActivationDeviceResult",
+                bearer=token,
+                json_body=body,
+                content_type="application/json",
+                expected_status=(200, 202),
+            )
+        except CentsysError as err:
+            _LOGGER.debug("ActivationDeviceResult report failed: %s", err)
 
     # -- MQTT client certificate ------------------------------------------
 

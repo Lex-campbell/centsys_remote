@@ -36,6 +36,13 @@ Older or non-Wi-Fi motors reached through a Centurion cellular module (e.g. **G-
 - **Live open/closed position** is only available if the module has a **status-feedback input wired**. When present, the cover greys correctly; when not (most installs are trigger-only), the cover uses "assumed state" and both buttons stay pressable.
 - **Diagnostics** (as separate sensors): supply voltage, signal strength, antenna, firmware, connection status, network type (2G/3G/4G), device number, and — on prepaid SIMs, after pressing **Refresh airtime** — call/SMS token counts.
 
+### Shared / community gates (access sharing) — experimental
+
+Gates you don't own but have been **shared** with your number (in the app's *Access sharing*), such as a residential estate's gate exposing actions like *Main Gate* and *Pedestrian*. Support here depends on the gate's connection type, because that's what the app itself is limited by:
+
+- **GSM/ULTRA (cellular) shared gates — supported.** These are triggered through the cellular gateway, which works from anywhere, so they appear as a gate/buttons like any other GSM gate. If your access is limited, a **Remaining triggers** and/or **Access expires** sensor is added, and the control goes unavailable once the share is depleted, expired or revoked. (Experimental — please report how it goes.)
+- **SMART (Wi-Fi) shared gates — view-only.** The official app opens a *shared* Wi-Fi gate over **Bluetooth while you're at the gate** (a shared user has no remote credentials for someone else's operator), so there is no remote way to trigger it — not from Home Assistant, and not from the app when you're away. These are shown **read-only**: you get the device plus *Access expires* / *Remaining triggers* sensors, and a Repair notice explaining the limitation, but **no controls** (triggering would only notify the owner without moving the gate). If it's *your own* Wi-Fi gate, add it with the owning number instead — then it's a normal, fully-supported SMART operator.
+
 ### Known-good devices
 
 | Device | Connection | Status |

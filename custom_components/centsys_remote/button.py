@@ -17,7 +17,9 @@ from .entity import (
     CentsysEntity,
     CentsysGsmEntity,
     CentsysGsmIoEntity,
+    CentsysSharedEntity,
     async_setup_dynamic_entities,
+    shared_action_presentation,
 )
 
 
@@ -30,7 +32,8 @@ async def async_setup_entry(
 
     def _factory(key: str):
         data = coordinator.data.get(key) or {}
-        if data.get("kind") == "wifi":
+        kind = data.get("kind")
+        if kind == "wifi":
             # Garage-door operators have no pedestrian mode. The telemetry
             # family is the signal; productType is unreliable, as the same type
             # ships as either a gate or a garage.
@@ -38,7 +41,18 @@ async def async_setup_entry(
             if overview is not None and overview.is_garage:
                 return []
             return [CentsysWifiPedestrianButton(coordinator, key)]
-        if data.get("kind") != "gsm":
+        if kind == "shared":
+            # Only GSM/ULTRA shares are controllable; SMART shares are read-only
+            # (BLE-at-the-gate). The gate action is the cover; every other action
+            # (pedestrian, keep-open, ...) becomes its own button.
+            access = data.get("shared")
+            if access is None or not access.is_ultra:
+                return []
+            return [
+                CentsysSharedActionButton(coordinator, key, action)
+                for action in access.button_actions
+            ]
+        if kind != "gsm":
             return []
         entities: list[ButtonEntity] = [CentsysGsmAirtimeButton(coordinator, key)]
         device = data.get("gsm_device")
@@ -143,6 +157,36 @@ class CentsysGsmIoButton(CentsysGsmIoEntity, ButtonEntity):
             await self.coordinator.client.trigger_gsm_activation(
                 device.device_id, self._io_number
             )
+        except CentsysError as err:
+            raise HomeAssistantError(
+                f"Failed to activate {self._attr_name}: {err}"
+            ) from err
+
+
+class CentsysSharedActionButton(CentsysSharedEntity, ButtonEntity):
+    """A non-gate action on a shared-access gate (pedestrian, keep-open, ...).
+
+    Pressing triggers the action server-side via the AccessSharing
+    ``SendActivation`` call -- the same as tapping it in the official app.
+    """
+
+    def __init__(self, coordinator: CentsysCoordinator, key: str, action) -> None:
+        super().__init__(coordinator, key)
+        self._action_id = action.id
+        label, icon = shared_action_presentation(action.name)
+        self._attr_name = label
+        self._attr_icon = icon
+        self._attr_unique_id = self._uid(f"action_{action.id}")
+
+    async def async_press(self) -> None:
+        access = self._access
+        # Re-resolve the action from the freshly-polled access (objects are
+        # replaced each update); the id is stable.
+        action = access.action_by_id(self._action_id) if access else None
+        if access is None or action is None:
+            raise HomeAssistantError("This shared action is no longer available.")
+        try:
+            await self.coordinator.client.trigger_shared_action(access, action)
         except CentsysError as err:
             raise HomeAssistantError(
                 f"Failed to activate {self._attr_name}: {err}"
