@@ -218,25 +218,34 @@ def gsm_io_is_on(state_id: int | None) -> bool | None:
 
 @dataclass
 class GsmStatus:
-    """Live IO states for a legacy GSM/ULTRA operator (AppIOStatesEN).
+    """Live IO states for a legacy GSM/ULTRA operator.
 
-    ``io_states`` is the list of per-IO state ids as returned in the ``IOList``.
-    An operator only reports a gate position if it has a status-feedback input
-    wired and configured; otherwise no IO carries a gate-state id and the gate
-    position is unknown (``gate_state`` is ``None``).
+    ``io_states`` is a positional array: entry ``n`` is the reported state id
+    of IO number ``n + 1``. An operator only reports a gate position if it has
+    a status-feedback input wired and configured; otherwise no IO carries a
+    gate-state id and the gate position is unknown (``gate_state`` is ``None``).
     """
 
     device_id: int
     io_states: list[str] = field(default_factory=list)
-    io_state_by_number: dict[int, int] = field(default_factory=dict)
     online: bool = True
     raw: dict[str, Any] = field(default_factory=dict)
+
+    def _state_id(self, io_number: int) -> int | None:
+        """The reported state id for a 1-based IO number, or None if absent."""
+        index = io_number - 1
+        if not 0 <= index < len(self.io_states):
+            return None
+        try:
+            return int(self.io_states[index])
+        except (TypeError, ValueError):
+            return None
 
     def is_on(self, io_number: int) -> bool | None:
         """On/off for a two-state IO by its number, or None if unknown."""
         if not self.online:
             return None
-        return gsm_io_is_on(self.io_state_by_number.get(io_number))
+        return gsm_io_is_on(self._state_id(io_number))
 
     @property
     def gate_state(self) -> str | None:
@@ -274,24 +283,19 @@ class GsmStatus:
     def from_root(cls, device_id: int | str, root: dict[str, Any]) -> "GsmStatus":
         io_list = root.get("IOList") or root.get("ioList") or []
         states: list[str] = []
-        by_number: dict[int, int] = {}
         if isinstance(io_list, list):
+            # Keep the array positional: every entry maps to one IO in order, so
+            # a missing/malformed entry becomes a placeholder rather than a skip.
             for entry in io_list:
-                if not isinstance(entry, dict):
-                    continue
-                value = _pick(entry, "IOStateID", "IoStateId", "IOStateId")
-                if value is None:
-                    continue
-                states.append(str(value))
-                number = _pick(entry, "IONumber", "IoNumber")
-                try:
-                    by_number[int(number)] = int(value)
-                except (TypeError, ValueError):
-                    pass
+                value = (
+                    _pick(entry, "IOStateID", "IoStateId", "IOStateId")
+                    if isinstance(entry, dict)
+                    else None
+                )
+                states.append("" if value is None else str(value))
         return cls(
             device_id=int(device_id) if str(device_id).isdigit() else 0,
             io_states=states,
-            io_state_by_number=by_number,
             online=True,
             raw=root,
         )
