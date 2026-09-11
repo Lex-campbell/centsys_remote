@@ -207,6 +207,7 @@ class CentsysGsmIoEntity(CentsysGsmEntity):
 
     def __init__(self, coordinator: CentsysCoordinator, key: str, io) -> None:
         super().__init__(coordinator, key)
+        self._io = io
         self._io_number = io.io_number
         label, icon = gsm_io_presentation(io.io_name, io.io_number)
         self._attr_name = label
