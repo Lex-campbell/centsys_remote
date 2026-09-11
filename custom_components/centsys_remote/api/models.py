@@ -216,6 +216,32 @@ def gsm_io_is_on(state_id: int | None) -> bool | None:
     return state_id % 2 == 0
 
 
+_GSM_IO_TRUE_LABELS = {"on", "open", "active", "true", "1", "running", "aan"}
+_GSM_IO_FALSE_LABELS = {"off", "closed", "inactive", "false", "0", "stopped", "af"}
+
+
+def gsm_io_label_state(
+    raw: bool | None, on_label: str, off_label: str
+) -> tuple[str | None, bool | None]:
+    """Map a raw IO state to the label shown by the app and its meaning.
+
+    This handles inverted labels such as a pump with ``OnStateName="off"`` and
+    ``OffStateName="on"`` because the app renders the label, so HA must agree
+    with the app rather than report only the electrical level.
+    """
+    if raw is None:
+        return None, None
+    label = on_label if raw else off_label
+    normalized = label.strip().casefold()
+    if not normalized:
+        return label, raw
+    if normalized in _GSM_IO_TRUE_LABELS:
+        return label, True
+    if normalized in _GSM_IO_FALSE_LABELS:
+        return label, False
+    return label, raw
+
+
 @dataclass
 class GsmStatus:
     """Live IO states for a legacy GSM/ULTRA operator.

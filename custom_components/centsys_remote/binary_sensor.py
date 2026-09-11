@@ -16,6 +16,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .api.models import gsm_io_label_state
 from .const import DOMAIN
 from .coordinator import CentsysCoordinator
 from .entity import CentsysEntity, CentsysGsmIoEntity, async_setup_dynamic_entities
@@ -225,4 +226,13 @@ class CentsysGsmIoBinarySensor(CentsysGsmIoEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool | None:
         status = self._status
-        return status.is_on(self._io_number) if status else None
+        raw = status.is_on(self._io_number) if status else None
+        return gsm_io_label_state(raw, self._io.on_state_name, self._io.off_state_name)[1]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        status = self._status
+        raw = status.is_on(self._io_number) if status else None
+        label, _ = gsm_io_label_state(raw, self._io.on_state_name, self._io.off_state_name)
+        attributes = {"state_label": label, "raw_state": raw}
+        return {key: value for key, value in attributes.items() if value is not None}

@@ -88,6 +88,30 @@ def test_is_on_offline_is_unknown() -> None:
     assert status.is_on(1) is None
 
 
+def test_label_state_inverted_labels_flip_result() -> None:
+    assert models.gsm_io_label_state(True, "off", "on") == ("off", False)
+    assert models.gsm_io_label_state(False, "off", "on") == ("on", True)
+
+
+def test_label_state_normal_labels_preserve_raw() -> None:
+    assert models.gsm_io_label_state(True, "on", "off") == ("on", True)
+    assert models.gsm_io_label_state(False, "on", "off") == ("off", False)
+
+
+def test_label_state_unrecognised_labels_fall_back_to_raw() -> None:
+    assert models.gsm_io_label_state(True, "PULSED", "Gate Open") == ("PULSED", True)
+    assert models.gsm_io_label_state(False, "PULSED", "Gate Open") == ("Gate Open", False)
+
+
+def test_label_state_empty_labels_fall_back_to_raw() -> None:
+    assert models.gsm_io_label_state(True, "", "") == ("", True)
+    assert models.gsm_io_label_state(False, "", "") == ("", False)
+
+
+def test_label_state_unknown_raw_is_unknown() -> None:
+    assert models.gsm_io_label_state(None, "on", "off") == (None, None)
+
+
 def test_missing_entries_keep_alignment() -> None:
     # A malformed/empty entry must not shift the IOs that follow it.
     root = {"IOList": [{}, {"IOStateID": 89}]}
