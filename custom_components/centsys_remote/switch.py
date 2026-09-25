@@ -57,9 +57,8 @@ async def async_setup_entry(
         data = coordinator.data.get(key) or {}
         if data.get("kind") == "wifi":
             # These modes are a gate concept; on a garage the Holiday Lock id
-            # would open the door, so skip a telemetry-confirmed garage.
-            overview = data.get("overview")
-            if overview is not None and overview.is_garage:
+            # would open the door, so skip anything we know is a garage.
+            if coordinator.is_known_garage(key):
                 return []
             return [CentsysFlagSwitch(coordinator, key, d) for d in FLAG_SWITCHES]
         if data.get("kind") != "gsm":

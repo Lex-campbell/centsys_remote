@@ -23,6 +23,8 @@ from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from . import enums
+
 _LOGGER = logging.getLogger(__name__)
 
 # Private CA; leaf is CN=CentsysQA with no IP SAN (we connect by Azure IP).
@@ -278,6 +280,10 @@ class DeviceOverview:
     # bits 32-63 from the second, matching how the operator numbers them.
     notification_flags: int
     condition_flags: int
+    # The operator's own product code, from the message's "PC" property. This is
+    # the authoritative family signal -- the operator reports what it is. None
+    # when the message carried no such property.
+    reported_product_code: int | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -288,17 +294,37 @@ class DeviceOverview:
         return bool(self.condition_flags & CONDITION_HOLIDAY_LOCK)
 
     @property
+    def reported_family(self) -> str | None:
+        """"garage" or "gate" from the operator's reported product code, else None."""
+        fam = enums.product_family(self.reported_product_code)
+        if fam == "garage":
+            return "garage"
+        if fam in ("slider", "swing"):
+            return "gate"
+        return None
+
+    @property
     def is_garage(self) -> bool:
-        """Whether this operator is a garage door."""
+        """Whether this operator is a garage door.
+
+        Prefers the product code the operator reports; only falls back to the
+        telemetry frame shape when the operator didn't report one.
+        """
+        reported = self.reported_family
+        if reported is not None:
+            return reported == "garage"
         return self.family == GARAGE_FAMILY
 
     @property
     def is_gate(self) -> bool:
-        """Whether this is a known gate operator (a sliding or swing gate).
+        """Whether this is a gate operator (a sliding or swing gate).
 
-        Stricter than ``not is_garage``: an unrecognised family answers False,
-        so an action that is only safe on a gate is withheld rather than guessed.
+        Prefers the reported product code; an unrecognised operator answers
+        False, so a gate-only action is withheld rather than guessed.
         """
+        reported = self.reported_family
+        if reported is not None:
+            return reported == "gate"
         return self.family in GATE_FAMILIES
 
     @property
@@ -374,6 +400,21 @@ def _layout_for(length: int, *, strict: bool = False) -> tuple[str, str]:
         layout,
     )
     return layout, layout
+
+
+def reported_product_code(properties) -> int | None:
+    """Read the operator's product code from a deviceOverview's MQTT properties.
+
+    The operator tags each message with keyed user-properties; ``PC`` is its own
+    product code. Returns None when absent or not an integer.
+    """
+    for key, value in getattr(properties, "UserProperty", None) or []:
+        if key == "PC":
+            try:
+                return int(str(value).strip())
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 def parse_device_overview(payload: bytes, *, strict: bool = False) -> DeviceOverview:
@@ -692,6 +733,7 @@ def follow_overview_blocking(
                 ov = parse_device_overview(msg.payload, strict=msg.topic == t_sysurc)
             except ValueError:
                 return
+            ov.reported_product_code = reported_product_code(msg.properties)
             try:
                 on_overview(ov)
             except Exception:  # noqa: BLE001 - never let a callback kill the loop
@@ -812,11 +854,11 @@ def fetch_overview_blocking(
             conn_resp.set()
         elif msg.topic in (t_overview, t_sysurc) and msg.payload:
             try:
-                holder["overview"] = parse_device_overview(
-                    msg.payload, strict=msg.topic == t_sysurc
-                )
+                ov = parse_device_overview(msg.payload, strict=msg.topic == t_sysurc)
             except ValueError:
                 return
+            ov.reported_product_code = reported_product_code(msg.properties)
+            holder["overview"] = ov
             got_overview.set()
 
     def props() -> "Properties":

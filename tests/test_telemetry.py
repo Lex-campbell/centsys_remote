@@ -1,22 +1,37 @@
 """Tests for deviceOverview decoding (family detection and Holiday Lock).
 
-``api/mqtt_remote.py`` is loaded straight from its file path so these tests run
-with plain ``pytest`` and no Home Assistant install. The module only needs the
-standard library plus ``cryptography``/``paho`` at call time, not at import.
+``api/mqtt_remote.py`` is loaded from its file path so these tests run with plain
+``pytest`` and no Home Assistant install. It imports its sibling ``enums`` via a
+package-relative import, so both are registered under a synthetic package here;
+neither needs ``cryptography``/``paho`` until a network function is called.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import sys
+import types
 from pathlib import Path
 
-_SRC = Path(__file__).resolve().parents[1] / "custom_components" / "centsys_remote" / "api" / "mqtt_remote.py"
-_spec = importlib.util.spec_from_file_location("centsys_mqtt_remote", _SRC)
-assert _spec and _spec.loader
-mqtt_remote = importlib.util.module_from_spec(_spec)
-sys.modules["centsys_mqtt_remote"] = mqtt_remote
-_spec.loader.exec_module(mqtt_remote)
+_API = Path(__file__).resolve().parents[1] / "custom_components" / "centsys_remote" / "api"
+
+# A synthetic parent package so mqtt_remote's ``from . import enums`` resolves.
+_pkg = types.ModuleType("centsys_api")
+_pkg.__path__ = [str(_API)]
+sys.modules["centsys_api"] = _pkg
+
+
+def _load(name: str):
+    spec = importlib.util.spec_from_file_location(f"centsys_api.{name}", _API / f"{name}.py")
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[f"centsys_api.{name}"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+enums = _load("enums")
+mqtt_remote = _load("mqtt_remote")
 
 _HEADER = bytes.fromhex("00263924")
 
@@ -82,6 +97,8 @@ def test_unknown_family_is_not_treated_as_a_gate() -> None:
     # garage, so guessing wrong would move a door).
     class _Unknown:
         family = "something-new"
+        reported_product_code = None  # nothing reported -> falls back to frame
+        reported_family = mqtt_remote.DeviceOverview.reported_family
         is_gate = mqtt_remote.DeviceOverview.is_gate
         is_garage = mqtt_remote.DeviceOverview.is_garage
 
@@ -197,3 +214,45 @@ def test_sys_tp_urc_style_strict_parsing_rejects_unknown_length() -> None:
         pass
     else:  # pragma: no cover
         raise AssertionError("strict parsing should reject an unknown length")
+
+
+# --- operator-reported product code overrides the frame shape -----------------
+
+
+def test_reported_garage_code_overrides_gate_frame() -> None:
+    # The reporter's case: a garage whose telemetry body decodes as a gate. The
+    # product code it reports (39 -> internal 41 -> garage) must win.
+    ov = mqtt_remote.parse_device_overview(_v2_frame())  # body looks like a gate
+    assert ov.is_gate and not ov.is_garage  # without a reported code
+    ov.reported_product_code = 39
+    assert ov.reported_family == "garage"
+    assert ov.is_garage is True
+    assert ov.is_gate is False
+
+
+def test_reported_gate_code_is_a_gate() -> None:
+    ov = mqtt_remote.parse_device_overview(_garage())  # body is the garage shape
+    ov.reported_product_code = 41  # D5 Evo reports 41 -> internal 43 -> slider
+    assert ov.reported_family == "gate"
+    assert ov.is_gate is True
+    assert ov.is_garage is False
+
+
+def test_absent_reported_code_falls_back_to_frame_shape() -> None:
+    ov = mqtt_remote.parse_device_overview(_garage())
+    assert ov.reported_product_code is None
+    assert ov.reported_family is None
+    assert ov.is_garage is True  # from the 24-byte garage frame
+
+
+def test_reported_product_code_reads_the_pc_property() -> None:
+    class _Props:
+        UserProperty = [("ClientId", "x"), ("PC", "39"), ("FW", "1.2.3")]
+
+    assert mqtt_remote.reported_product_code(_Props()) == 39
+    assert mqtt_remote.reported_product_code(None) is None
+
+    class _NoPc:
+        UserProperty = [("ClientId", "x")]
+
+    assert mqtt_remote.reported_product_code(_NoPc()) is None

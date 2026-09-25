@@ -1,7 +1,9 @@
 """Tests for the product-code family classifier in ``api/enums.py``.
 
-Loaded straight from its file path so the suite runs with plain ``pytest`` and
-no Home Assistant install; the module is pure stdlib.
+The input is the product code the operator reports about itself (the telemetry
+"PC" field), not the cloud device listing's productType/productCode. Loaded
+straight from its file path so the suite runs with plain ``pytest`` and no Home
+Assistant install; the module is pure stdlib.
 """
 
 from __future__ import annotations
@@ -17,12 +19,20 @@ _spec.loader.exec_module(enums)
 
 
 def test_our_gate_classifies_as_slider() -> None:
-    # The D5 Evo used to develop this reports product code 41 and is a slider.
+    # The D5 Evo reports product code 41 in its telemetry and is a slider.
     assert enums.product_family(41) == "slider"
 
 
 def test_garage_product_code() -> None:
+    # A garage reports code 39 (-> internal 41).
     assert enums.product_family(39) == "garage"
+
+
+def test_cloud_sdo5_code_is_not_classified() -> None:
+    # The SDO5's *cloud* productCode is 51, a different numbering that is out of
+    # range here. It must NOT classify (the operator-reported code is used
+    # instead); returning None keeps us on the safe fallback.
+    assert enums.product_family(51) is None
 
 
 def test_swing_product_code() -> None:

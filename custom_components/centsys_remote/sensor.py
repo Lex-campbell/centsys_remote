@@ -146,7 +146,9 @@ SENSORS: tuple[CentsysSensorDescription, ...] = (
         translation_key="product_code",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
-        value_fn=lambda data: data["device"].product_code,
+        # Sourced from the operator-reported code the coordinator has learned
+        # (see native_value); the same value that drives family classification.
+        value_fn=lambda data: None,
     ),
     CentsysSensorDescription(
         key="wifi_rssi",
@@ -320,6 +322,9 @@ class CentsysSensor(CentsysEntity, SensorEntity):
             live = self.coordinator.live_gate_status(self._serial)
             if live:
                 return live
+        # The product code is the operator-reported one the coordinator persists.
+        if self.entity_description.key == "product_code":
+            return self.coordinator.learned_product_code(self._serial)
         return self.entity_description.value_fn(data)
 
 

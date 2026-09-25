@@ -9,6 +9,9 @@ CONF_COUNTRY = "country"
 CONF_TOKEN = "token"
 CONF_NAME = "name"
 CONF_EMAIL = "email"
+# Per-operator product codes the operator reported over telemetry, kept so a
+# gate/garage stays correctly classified across restarts and telemetry gaps.
+CONF_PRODUCT_CODES = "product_codes"
 
 # OTP delivery channel (matches the app's OtpPlatformEnum).
 OTP_PLATFORM_WHATSAPP = 1

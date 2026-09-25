@@ -56,19 +56,20 @@ class BeamStatus(IntEnum):
     IO_8K2ERR_BLE_SLEEP = 24
 
 
-# Operator families keyed by the ``productCode`` the cloud reports for a device
-# (distinct from the unreliable ``productType`` field, which must not be used to
-# choose an activation). The code is normalised before lookup.
+# Operator families keyed by the product code the operator reports about itself
+# (the "PC" field in its live telemetry). This is normalised before lookup. Note
+# this is NOT the cloud device listing's ``productType``/``productCode``, which
+# are a different numbering and must not be used to choose an activation.
 _SLIDER_PRODUCT_CODES = frozenset({34, 43, 44, 45})
 _SWING_PRODUCT_CODES = frozenset({25})
 _GARAGE_PRODUCT_CODES = frozenset({41})
 
 
 def product_family(code: int | None) -> str | None:
-    """Return "slider", "swing" or "garage" for a device's ``productCode``.
+    """Return "slider", "swing" or "garage" for an operator-reported product code.
 
-    Returns None for a code we don't recognise, so callers fall back to live
-    telemetry (or the safe default) rather than guessing.
+    Returns None for a code we don't recognise, so callers fall back to the
+    telemetry frame shape (or the safe default) rather than guessing.
     """
     if code is None or code < 1:
         return None

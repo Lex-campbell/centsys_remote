@@ -34,11 +34,9 @@ async def async_setup_entry(
         data = coordinator.data.get(key) or {}
         kind = data.get("kind")
         if kind == "wifi":
-            # Garage-door operators have no pedestrian mode. The telemetry
-            # family is the signal; productType is unreliable, as the same type
-            # ships as either a gate or a garage.
-            overview = data.get("overview")
-            if overview is not None and overview.is_garage:
+            # Garage-door operators have no pedestrian mode, so skip anything we
+            # know is a garage.
+            if coordinator.is_known_garage(key):
                 return []
             return [CentsysWifiPedestrianButton(coordinator, key)]
         if kind == "shared":

@@ -16,13 +16,14 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import CentsysRemoteClient
+from .api import CentsysRemoteClient, enums
 from .api.exceptions import CentsysAuthError, CentsysError
 from .api.models import SharedAccess, parse_shared_accesses
 from .const import (
     AIRTIME_POLL_ATTEMPTS,
     AIRTIME_POLL_INTERVAL,
     CONF_MOBILE_NUMBER,
+    CONF_PRODUCT_CODES,
     CONF_TOKEN,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -78,6 +79,12 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             session_token=entry.data[CONF_TOKEN],
         )
         self._overview: dict[str, Any] = {}
+        # Product codes the operator reported about itself over telemetry, kept
+        # per serial so a gate/garage stays classified across restarts and the
+        # gaps when telemetry doesn't arrive. Loaded from the config entry.
+        self._reported_codes: dict[str, int] = dict(
+            entry.data.get(CONF_PRODUCT_CODES) or {}
+        )
         # Live gate-status pushed by a cover's follow after a press, keyed by the
         # entity key (Wi-Fi serial or GSM key): (label, monotonic expiry). It
         # takes precedence over the cloud poll while fresh so the cover *and*
@@ -158,9 +165,53 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         # This is a real telemetry read, so it counts as one: no need to wake
         # the operator again on the usual cadence right after.
         self._last_telemetry = time.monotonic()
+        self._remember_product_code(serial, getattr(overview, "reported_product_code", None))
         if self.data and serial in self.data:
             self.data[serial]["overview"] = overview
         self.async_update_listeners()
+
+    def _remember_product_code(self, serial: str, code: int | None) -> None:
+        """Persist a newly-seen operator-reported product code on the entry."""
+        if code is None or self._reported_codes.get(serial) == code:
+            return
+        self._reported_codes[serial] = code
+        self.hass.config_entries.async_update_entry(
+            self.entry,
+            data={**self.entry.data, CONF_PRODUCT_CODES: dict(self._reported_codes)},
+        )
+
+    def learned_product_code(self, serial: str) -> int | None:
+        """The product code the operator last reported about itself.
+
+        Persisted per-serial, so it stays available across telemetry gaps and
+        restarts. None until the operator has reported one.
+        """
+        return self._reported_codes.get(serial)
+
+    def learned_family(self, serial: str) -> str | None:
+        """"garage" or "gate" from a product code the operator reported before.
+
+        None when we've never seen a code for this serial, so a caller uses the
+        safe default rather than guessing.
+        """
+        family = enums.product_family(self._reported_codes.get(serial))
+        if family == "garage":
+            return "garage"
+        if family in ("slider", "swing"):
+            return "gate"
+        return None
+
+    def is_known_garage(self, serial: str) -> bool:
+        """Whether this operator is known to be a garage door.
+
+        True from live telemetry or a product code the operator reported before.
+        Used to withhold gate-only controls, where a wrong guess would move a
+        door, so an unknown operator answers False.
+        """
+        overview = self._overview.get(serial)
+        if overview is not None and overview.is_garage:
+            return True
+        return self.learned_family(serial) == "garage"
 
     def async_force_telemetry(self) -> None:
         """Let the next update read MQTT telemetry, ignoring its slow cadence.

@@ -46,7 +46,6 @@ class Device:
     serial_number: str
     device_name: str
     product_type: int | None = None
-    product_code: int | None = None
     is_wifi_device: bool = False
     is_online: bool | None = None
     latitude: str | None = None
@@ -65,7 +64,6 @@ class Device:
             serial_number=data.get("serialNumber", ""),
             device_name=data.get("deviceName", ""),
             product_type=data.get("productType"),
-            product_code=data.get("productCode"),
             is_wifi_device=bool(data.get("isWifiDevice", False)),
             is_online=wifi_status.get("isOnline"),
             latitude=data.get("lattitude"),  # note: backend misspells "latitude"
@@ -76,15 +74,6 @@ class Device:
             mac_address=data.get("macAddress"),
             raw=data,
         )
-
-    @property
-    def product_family(self) -> str | None:
-        """"slider", "swing" or "garage" from the product code, or None.
-
-        Uses ``productCode`` (not the unreliable ``productType``) so a garage can
-        be told from a gate even when live telemetry is unavailable.
-        """
-        return enums.product_family(self.product_code)
 
 
 def _pick(data: dict[str, Any], *keys: str, default: Any = None) -> Any:
