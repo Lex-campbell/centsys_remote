@@ -33,6 +33,8 @@ Older or non-Wi-Fi motors reached through a Centurion cellular module (e.g. **G-
 
 - **Open/close** works as a single-button trigger (a momentary pulse), just like the physical remote.
 - **Auxiliary outputs** — any additional configured outputs (pedestrian, lock, garage, courtesy light, ...) surface as separate entities: momentary outputs as **buttons**, two-state outputs as **switches**, and status-feedback inputs as **binary sensors** — matching the buttons you see in the app.
+- **Input state labels** follow the on/off labels configured in the app, including inverted labels.
+- The `raw_state` attribute exposes the electrical level for automations that need it.
 - **Live open/closed position** is only available if the module has a **status-feedback input wired**. When present, the cover greys correctly; when not (most installs are trigger-only), the cover uses "assumed state" and both buttons stay pressable.
 - **Diagnostics** (as separate sensors): supply voltage, signal strength, antenna, firmware, connection status, network type (2G/3G/4G), device number, and — on prepaid SIMs, after pressing **Refresh airtime** — call/SMS token counts.
 
