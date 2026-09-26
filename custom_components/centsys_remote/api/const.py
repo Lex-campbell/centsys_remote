@@ -17,6 +17,12 @@ MQTT_PORT = 8880
 # the MQTT clientId and a "ClientId" user property on every publish.
 MQTT_CLIENT_ID_PREFIX = "mcr:"
 
+# Suffix appended to the clientId for the opt-in persistent live listener, so it
+# is distinct from the phone app's "mcr:<number>" (and from our own short-lived
+# open/telemetry connections) and never collides on the broker. Confirmed on
+# hardware to receive broadcasts and accept the connectionRequest/wake (D15).
+LISTENER_CLIENT_SUFFIX = ":ha"
+
 # Trigger packets are built per operator from its macAddress (see api/packets.py).
 
 # Service-level bearer used for the initial SendOtp/ValidateOtp calls, before a

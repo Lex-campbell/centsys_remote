@@ -38,6 +38,17 @@
       "reauth_successful": "Signed in again successfully."
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Live status",
+        "description": "Keep a lightweight connection open to your gate so it reports movement in real time - including when it's opened by a physical remote, the app or a schedule. It runs alongside the MyCentsys app without disturbing it. Leave this off to rely on the periodic cloud poll.",
+        "data": {
+          "enable_live_listener": "Enable live status"
+        }
+      }
+    }
+  },
   "issues": {
     "no_gates_linked": {
       "title": "No gates linked to this number",

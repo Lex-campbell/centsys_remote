@@ -19,6 +19,8 @@ import ssl
 import struct
 import tempfile
 import threading
+import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -519,6 +521,91 @@ def pfx_to_pem(pfx_b64: str, password: str) -> tuple[bytes, bytes]:
     return cert_pem, key_pem
 
 
+@contextmanager
+def operator_session(
+    *,
+    host: str,
+    port: int,
+    client_id: str,
+    cert_pem: bytes,
+    key_pem: bytes,
+    on_connect,
+    on_message,
+    on_subscribe=None,
+    on_disconnect=None,
+    on_close=None,
+    keepalive: int = 30,
+):
+    """A connected, loop-started paho MQTT v5 client for one broker session.
+
+    Owns the boilerplate every MQTT exchange shares: writing the short-lived
+    client-cert PEM files, pinned-CA mTLS, the v5 client + clientId, the
+    ``connect`` (mapping a broker "certificate expired" rejection to
+    ``CentsysCertExpiredError``), the background network loop, and teardown -- an
+    optional ``on_close(client)`` publish (e.g. the ``<serial>/disconnect``
+    release), then ``loop_stop``/``disconnect`` and unlinking the temp cert
+    files. Callers supply the topic/subscribe/publish/event logic via the paho
+    callbacks and the body of the ``with`` block.
+    """
+    import paho.mqtt.client as mqtt
+
+    cert_file = key_file = None
+    client = mqtt.Client(
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+        client_id=client_id,
+        protocol=mqtt.MQTTv5,
+    )
+    client.on_connect = on_connect
+    client.on_message = on_message
+    if on_subscribe is not None:
+        client.on_subscribe = on_subscribe
+    if on_disconnect is not None:
+        client.on_disconnect = on_disconnect
+
+    try:
+        fd_c, cert_file = tempfile.mkstemp(suffix=".pem")
+        os.write(fd_c, cert_pem)
+        os.close(fd_c)
+        fd_k, key_file = tempfile.mkstemp(suffix=".pem")
+        os.write(fd_k, key_pem)
+        os.close(fd_k)
+
+        configure_mqtt_tls(client, certfile=cert_file, keyfile=key_file)
+
+        try:
+            client.connect(host, port, keepalive=keepalive, clean_start=True)
+        except ssl.SSLError as err:
+            if "CERTIFICATE_EXPIRED" in str(err).upper():
+                from .exceptions import CentsysCertExpiredError
+
+                raise CentsysCertExpiredError(
+                    "The Centsys broker rejected the connection citing an expired "
+                    "certificate. This is a provider-side outage that affects all "
+                    "clients (the official app included); gate control resumes once "
+                    "Centsys resolves it."
+                ) from err
+            raise
+        client.loop_start()
+        yield client
+    finally:
+        if on_close is not None:
+            try:
+                on_close(client)
+            except Exception:  # noqa: BLE001 - best-effort release
+                pass
+        try:
+            client.loop_stop()
+            client.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        for f in (cert_file, key_file):
+            if f and os.path.exists(f):
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
+
+
 def open_gate_blocking(
     *,
     host: str,
@@ -544,7 +631,6 @@ def open_gate_blocking(
     Blocking (uses paho's loop in a background thread internally). Intended to be
     run via ``loop.run_in_executor`` from async code.
     """
-    import paho.mqtt.client as mqtt
     from paho.mqtt.packettypes import PacketTypes
     from paho.mqtt.properties import Properties
 
@@ -586,42 +672,17 @@ def open_gate_blocking(
         p.UserProperty = [("ClientId", client_id)]
         return p
 
-    # paho's SSLContext.load_cert_chain needs files; write short-lived ones.
-    cert_file = key_file = None
-    client = mqtt.Client(
-        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+    with operator_session(
+        host=host,
+        port=port,
         client_id=client_id,
-        protocol=mqtt.MQTTv5,
-    )
-    client.on_connect = on_connect
-    client.on_subscribe = on_subscribe
-    client.on_message = on_message
-
-    try:
-        fd_c, cert_file = tempfile.mkstemp(suffix=".pem")
-        os.write(fd_c, cert_pem)
-        os.close(fd_c)
-        fd_k, key_file = tempfile.mkstemp(suffix=".pem")
-        os.write(fd_k, key_pem)
-        os.close(fd_k)
-
-        configure_mqtt_tls(client, certfile=cert_file, keyfile=key_file)
-
-        try:
-            client.connect(host, port, keepalive=30, clean_start=True)
-        except ssl.SSLError as err:
-            if "CERTIFICATE_EXPIRED" in str(err).upper():
-                from .exceptions import CentsysCertExpiredError
-
-                raise CentsysCertExpiredError(
-                    "The Centsys broker rejected the connection citing an expired "
-                    "certificate. This is a provider-side outage that affects all "
-                    "clients (the official app included); gate control resumes once "
-                    "Centsys resolves it."
-                ) from err
-            raise
-        client.loop_start()
-
+        cert_pem=cert_pem,
+        key_pem=key_pem,
+        on_connect=on_connect,
+        on_subscribe=on_subscribe,
+        on_message=on_message,
+        on_close=lambda c: c.publish(t_disc, b"", qos=0, properties=props(t_disc)),
+    ) as client:
         if not subscribed.wait(timeout):
             _LOGGER.warning("MQTT open: subscriptions never confirmed")
             return False
@@ -659,22 +720,6 @@ def open_gate_blocking(
             _LOGGER.debug("MQTT open: config mismatch, retrying with version %s", gate_cv)
             cv = gate_cv
         return False
-    finally:
-        try:
-            client.publish(t_disc, b"", qos=0, properties=props(t_disc))
-        except Exception:  # noqa: BLE001 - best-effort release
-            pass
-        try:
-            client.loop_stop()
-            client.disconnect()
-        except Exception:  # noqa: BLE001
-            pass
-        for f in (cert_file, key_file):
-            if f and os.path.exists(f):
-                try:
-                    os.unlink(f)
-                except OSError:
-                    pass
 
 
 def follow_overview_blocking(
@@ -703,9 +748,10 @@ def follow_overview_blocking(
     Blocking; run via ``loop.run_in_executor``. Best-effort: connection issues
     are logged and end the follow rather than raising.
     """
-    import paho.mqtt.client as mqtt
     from paho.mqtt.packettypes import PacketTypes
     from paho.mqtt.properties import Properties
+
+    from .exceptions import CentsysCertExpiredError
 
     t_req = f"{serial}/connectionRequest"
     t_req_resp = f"{serial}/connectionRequestResponse"
@@ -745,57 +791,33 @@ def follow_overview_blocking(
         p.UserProperty = [("ClientId", client_id)]
         return p
 
-    cert_file = key_file = None
-    client = mqtt.Client(
-        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
-        client_id=client_id,
-        protocol=mqtt.MQTTv5,
-    )
-    client.on_connect = on_connect
-    client.on_subscribe = on_subscribe
-    client.on_message = on_message
-
+    # Best-effort: connection issues (including an expired cert) are logged and
+    # end the follow rather than raising -- the caller re-runs it on the next
+    # cycle.
     try:
-        fd_c, cert_file = tempfile.mkstemp(suffix=".pem")
-        os.write(fd_c, cert_pem)
-        os.close(fd_c)
-        fd_k, key_file = tempfile.mkstemp(suffix=".pem")
-        os.write(fd_k, key_pem)
-        os.close(fd_k)
+        with operator_session(
+            host=host,
+            port=port,
+            client_id=client_id,
+            cert_pem=cert_pem,
+            key_pem=key_pem,
+            on_connect=on_connect,
+            on_subscribe=on_subscribe,
+            on_message=on_message,
+            on_close=lambda c: c.publish(t_disc, b"", qos=0, properties=props()),
+        ) as client:
+            if not subscribed.wait(connect_timeout):
+                _LOGGER.debug("MQTT follow: subscriptions never confirmed")
+                return
+            client.publish(t_req, b"", qos=2, properties=props())
+            conn_resp.wait(connect_timeout)
+            if wake_cmd01:
+                client.publish(t_trig, wake_cmd01, qos=0, properties=props())
 
-        configure_mqtt_tls(client, certfile=cert_file, keyfile=key_file)
-
-        client.connect(host, port, keepalive=30, clean_start=True)
-        client.loop_start()
-
-        if not subscribed.wait(connect_timeout):
-            _LOGGER.debug("MQTT follow: subscriptions never confirmed")
-            return
-        client.publish(t_req, b"", qos=2, properties=props())
-        conn_resp.wait(connect_timeout)
-        if wake_cmd01:
-            client.publish(t_trig, wake_cmd01, qos=0, properties=props())
-
-        # Frames arrive on the network thread via on_message; just hold open.
-        threading.Event().wait(duration)
-    except OSError as err:
+            # Frames arrive on the network thread via on_message; just hold open.
+            threading.Event().wait(duration)
+    except (OSError, CentsysCertExpiredError) as err:
         _LOGGER.debug("MQTT follow: %s", err)
-    finally:
-        try:
-            client.publish(t_disc, b"", qos=0, properties=props())
-        except Exception:  # noqa: BLE001
-            pass
-        try:
-            client.loop_stop()
-            client.disconnect()
-        except Exception:  # noqa: BLE001
-            pass
-        for f in (cert_file, key_file):
-            if f and os.path.exists(f):
-                try:
-                    os.unlink(f)
-                except OSError:
-                    pass
 
 
 def fetch_overview_blocking(
@@ -823,7 +845,6 @@ def fetch_overview_blocking(
 
     Blocking; intended to be run via ``loop.run_in_executor``.
     """
-    import paho.mqtt.client as mqtt
     from paho.mqtt.packettypes import PacketTypes
     from paho.mqtt.properties import Properties
 
@@ -867,29 +888,17 @@ def fetch_overview_blocking(
         p.UserProperty = [("ClientId", client_id)]
         return p
 
-    cert_file = key_file = None
-    client = mqtt.Client(
-        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+    with operator_session(
+        host=host,
+        port=port,
         client_id=client_id,
-        protocol=mqtt.MQTTv5,
-    )
-    client.on_connect = on_connect
-    client.on_subscribe = on_subscribe
-    client.on_message = on_message
-
-    try:
-        fd_c, cert_file = tempfile.mkstemp(suffix=".pem")
-        os.write(fd_c, cert_pem)
-        os.close(fd_c)
-        fd_k, key_file = tempfile.mkstemp(suffix=".pem")
-        os.write(fd_k, key_pem)
-        os.close(fd_k)
-
-        configure_mqtt_tls(client, certfile=cert_file, keyfile=key_file)
-
-        client.connect(host, port, keepalive=30, clean_start=True)
-        client.loop_start()
-
+        cert_pem=cert_pem,
+        key_pem=key_pem,
+        on_connect=on_connect,
+        on_subscribe=on_subscribe,
+        on_message=on_message,
+        on_close=lambda c: c.publish(t_disc, b"", qos=0, properties=props()),
+    ) as client:
         if not subscribed.wait(timeout):
             _LOGGER.warning("MQTT overview: subscriptions never confirmed")
             return None
@@ -907,19 +916,134 @@ def fetch_overview_blocking(
             _LOGGER.warning("MQTT overview: no deviceOverview received (gate asleep?)")
             return None
         return holder.get("overview")
-    finally:
+
+
+def listen_overview_blocking(
+    *,
+    host: str,
+    port: int,
+    client_id: str,
+    serials,
+    cert_pem: bytes,
+    key_pem: bytes,
+    on_overview,
+    stop_event,
+    on_connected=None,
+    wakes=None,
+    wake_interval: float | None = None,
+    connect_timeout: float = 15.0,
+    poll_interval: float = 1.0,
+) -> str:
+    """Persistently stream ``deviceOverview`` for several operators until stopped.
+
+    Subscribe-only by default: it holds a connection (on a distinct clientId, so
+    it does not collide with the phone app) and receives whatever each operator
+    broadcasts during activity, invoking ``on_overview(serial, DeviceOverview)``
+    for every frame. When ``wakes`` (a ``{serial: cmd01}`` mapping) and
+    ``wake_interval`` are given it also publishes a per-serial connectionRequest
+    plus cmd 01 on connect and every ``wake_interval`` seconds, to pull idle
+    telemetry (battery/beams) too -- this does NOT open the gate.
+
+    Runs until ``stop_event`` is set (returns ``"stopped"``) or the broker
+    connection drops (returns ``"dropped"``), so a supervisor can reconnect with
+    backoff and a fresh certificate. Blocking; run via ``loop.run_in_executor``.
+    """
+    from paho.mqtt.packettypes import PacketTypes
+    from paho.mqtt.properties import Properties
+
+    serials = list(serials)
+    wakes = wakes or {}
+    serial_by_overview = {f"{s}/deviceOverview": s for s in serials}
+    serial_by_sysurc = {f"{s}/sysTpUrc": s for s in serials}
+
+    subscribed = threading.Event()
+    dropped = threading.Event()
+
+    def on_connect(client, userdata, flags, reason_code, properties=None):
+        subs: list[tuple[str, int]] = []
+        for s in serials:
+            subs.append((f"{s}/deviceOverview", 0))
+            subs.append((f"{s}/sysTpUrc", 0))
+            if wakes:
+                # Only needed to receive the wake's handshake replies; the
+                # telemetry itself still arrives on deviceOverview.
+                subs.append((f"{s}/connectionRequestResponse", 0))
+                subs.append((f"{s}/userRemoteTriggerResponse", 0))
+        if subs:
+            client.subscribe(subs)
+
+    def on_subscribe(client, userdata, mid, reason_codes, properties=None):
+        subscribed.set()
+
+    def on_disconnect(client, userdata, *args):
+        dropped.set()
+
+    def on_message(client, userdata, msg):
+        serial = serial_by_overview.get(msg.topic)
+        strict = False
+        if serial is None:
+            serial = serial_by_sysurc.get(msg.topic)
+            strict = True
+        if serial is None or not msg.payload:
+            return
         try:
-            client.publish(t_disc, b"", qos=0, properties=props())
-        except Exception:  # noqa: BLE001 - best-effort release
-            pass
+            ov = parse_device_overview(msg.payload, strict=strict)
+        except ValueError:
+            return
+        ov.reported_product_code = reported_product_code(msg.properties)
         try:
-            client.loop_stop()
-            client.disconnect()
-        except Exception:  # noqa: BLE001
-            pass
-        for f in (cert_file, key_file):
-            if f and os.path.exists(f):
-                try:
-                    os.unlink(f)
-                except OSError:
-                    pass
+            on_overview(serial, ov)
+        except Exception:  # noqa: BLE001 - never let a callback kill the loop
+            _LOGGER.debug("listen on_overview callback raised", exc_info=True)
+
+    def props(serial: str) -> "Properties":
+        p = Properties(PacketTypes.PUBLISH)
+        p.ResponseTopic = f"{serial}/connectionRequestResponse"
+        p.UserProperty = [("ClientId", client_id)]
+        return p
+
+    def send_wakes(client) -> None:
+        for s in serials:
+            client.publish(f"{s}/connectionRequest", b"", qos=2, properties=props(s))
+            cmd01 = wakes.get(s)
+            if cmd01:
+                client.publish(f"{s}/userRemoteTrigger", cmd01, qos=0, properties=props(s))
+
+    def on_close(client) -> None:
+        # Only release operators we actually connected to (wake path).
+        for s in serials:
+            client.publish(f"{s}/disconnect", b"", qos=0, properties=props(s))
+
+    with operator_session(
+        host=host,
+        port=port,
+        client_id=client_id,
+        cert_pem=cert_pem,
+        key_pem=key_pem,
+        on_connect=on_connect,
+        on_subscribe=on_subscribe,
+        on_message=on_message,
+        on_disconnect=on_disconnect,
+        on_close=on_close if wakes else None,
+    ) as client:
+        if not subscribed.wait(connect_timeout):
+            _LOGGER.debug("MQTT listen: subscriptions never confirmed")
+            return "dropped"
+        if on_connected is not None:
+            try:
+                on_connected()
+            except Exception:  # noqa: BLE001 - never let a callback kill the loop
+                _LOGGER.debug("listen on_connected callback raised", exc_info=True)
+        if wakes:
+            send_wakes(client)
+        do_wake = bool(wakes and wake_interval)
+        next_wake = time.monotonic() + wake_interval if do_wake else None
+        while not stop_event.is_set() and not dropped.is_set():
+            if stop_event.wait(poll_interval):
+                break
+            if dropped.is_set():
+                break
+            if next_wake is not None and time.monotonic() >= next_wake:
+                send_wakes(client)
+                next_wake = time.monotonic() + wake_interval
+        return "stopped" if stop_event.is_set() else "dropped"

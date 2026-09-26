@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -22,6 +23,7 @@ from .api.models import SharedAccess, parse_shared_accesses
 from .const import (
     AIRTIME_POLL_ATTEMPTS,
     AIRTIME_POLL_INTERVAL,
+    CONF_ENABLE_LIVE_LISTENER,
     CONF_MOBILE_NUMBER,
     CONF_PRODUCT_CODES,
     CONF_TOKEN,
@@ -116,6 +118,9 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._shared_loaded = False
         self._last_shared = 0.0
         self._tasks: set[asyncio.Task] = set()
+        # The persistent live listener (Wi-Fi), when enabled via options. None
+        # means the legacy poll + post-press follow are the telemetry producers.
+        self._live_listener: Any = None
 
     def async_spawn(self, coro, *, name: str) -> None:
         """Start a best-effort background job owned by this config entry.
@@ -128,8 +133,27 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
+    def start_live_sources(self) -> None:
+        """Start the persistent live listener if enabled in the entry options.
+
+        The single place the ``CONF_ENABLE_LIVE_LISTENER`` flag is read. When it
+        is off, the legacy periodic poll + post-press follow remain the telemetry
+        producers; when on, the listener supplies live movement and idle refresh,
+        and gates those legacy producers off via ``LiveListener.active``.
+        """
+        if not self.entry.options.get(CONF_ENABLE_LIVE_LISTENER, False):
+            return
+        from .live_listener import LiveListener
+
+        self._live_listener = LiveListener(self)
+        self._live_listener.start()
+
     async def async_shutdown(self) -> None:
         """Cancel in-flight background jobs, then stop polling."""
+        if self._live_listener is not None:
+            # Set the listener's stop event first so its executor thread returns
+            # promptly, then cancel the tracked tasks.
+            await self._live_listener.async_stop()
         for task in list(self._tasks):
             task.cancel()
         self._tasks.clear()
@@ -151,24 +175,62 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         """Live gate-status label for ``key`` if still within its TTL, else None."""
         return self._live_status_label(key)
 
+    def ingest_overview(
+        self, serial: str, overview: Any, *, live: bool, notify: bool = True
+    ) -> None:
+        """Single sink for every telemetry producer (poll, follow, on-demand, listener).
+
+        Caches the overview, learns the operator's reported product code, and
+        refreshes the per-serial ``data`` entry. When ``live`` it also pushes the
+        gate status as the TTL-bounded live position, so a moving gate shows
+        immediately. Producers must never touch ``_overview`` or the live-status
+        map directly -- this is the seam the live listener feeds and the one the
+        legacy poll/follow can be removed behind.
+
+        ``notify`` is False only for the periodic poll, which runs inside the
+        coordinator update cycle that notifies listeners itself; live frames and
+        on-demand reads notify.
+        """
+        if overview is None:
+            return
+        self._overview[serial] = overview
+        # A real telemetry read counts as one, so the wake cadence doesn't
+        # re-wake the operator right after.
+        self._last_telemetry = time.monotonic()
+        self._remember_product_code(
+            serial, getattr(overview, "reported_product_code", None)
+        )
+        if self.data and serial in self.data:
+            self.data[serial]["overview"] = overview
+        if live and getattr(overview, "gate_status", None) is not None:
+            # set_live_gate_status notifies listeners itself.
+            self.set_live_gate_status(serial, overview.gate_status)
+        elif notify:
+            self.async_update_listeners()
+
+    def _thread_safe_ingest(self, serial: str, overview: Any) -> None:
+        """Ingest a frame arriving on an MQTT worker thread, on the event loop.
+
+        Shared by the post-press follow and the live listener so both push their
+        frames through :meth:`ingest_overview` (as live positions) safely from
+        the network thread.
+        """
+        if overview is None:
+            return
+        self.hass.loop.call_soon_threadsafe(
+            functools.partial(self.ingest_overview, serial, overview, live=True)
+        )
+
     def set_overview(self, serial: str, overview: Any) -> None:
         """Cache an on-demand MQTT overview and surface it to entities.
 
         Lets a cover that had no cached telemetry (cold start) store the
         overview it just fetched, so the garage/gate family is known for later
         presses and the pedestrian-button exposure without waiting for the slow
-        telemetry poll.
+        telemetry poll. Thin wrapper over :meth:`ingest_overview` -- an on-demand
+        read, not a live movement frame, so it does not push a live position.
         """
-        if overview is None:
-            return
-        self._overview[serial] = overview
-        # This is a real telemetry read, so it counts as one: no need to wake
-        # the operator again on the usual cadence right after.
-        self._last_telemetry = time.monotonic()
-        self._remember_product_code(serial, getattr(overview, "reported_product_code", None))
-        if self.data and serial in self.data:
-            self.data[serial]["overview"] = overview
-        self.async_update_listeners()
+        self.ingest_overview(serial, overview, live=False)
 
     def _remember_product_code(self, serial: str, code: int | None) -> None:
         """Persist a newly-seen operator-reported product code on the entry."""
@@ -222,6 +284,19 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         """
         self._force_telemetry = True
 
+    def note_activation(self, serial: str) -> None:
+        """Signal that a trigger was just sent to this operator.
+
+        The single hook the cover and pedestrian button call after a successful
+        activation. Today it starts a short live-follow of the status stream so
+        the open/close cycle shows in real time; when the persistent live
+        listener is active it is a no-op (the listener already streams). Entities
+        never branch on the mode -- they just report the press here.
+        """
+        if self._live_listener is not None and self._live_listener.active:
+            return
+        self.start_live_follow(serial)
+
     def start_live_follow(self, serial: str) -> None:
         """Follow the MQTT status stream for one open/close cycle after a press.
 
@@ -235,19 +310,11 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         device = data.get("device")
         mac = getattr(device, "mac_address", None)
         self._live_following.add(serial)
-        loop = self.hass.loop
-
-        def _apply(overview) -> None:
-            # The stream is already open, so keep the whole frame rather than
-            # just the position: it also carries battery, beams and the Holiday
-            # Lock bit, which would otherwise wait for the slow telemetry cycle.
-            self.set_overview(serial, overview)
-            self.set_live_gate_status(serial, overview.gate_status)
 
         def _on_overview(overview) -> None:  # called from a worker thread
-            if overview is None:
-                return
-            loop.call_soon_threadsafe(_apply, overview)
+            # The stream is already open, so keep the whole frame (battery,
+            # beams, Holiday Lock bit) as a live position via the shared sink.
+            self._thread_safe_ingest(serial, overview)
 
         async def _runner() -> None:
             try:
@@ -608,6 +675,12 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         operator that is asleep, offline or has no MAC would otherwise be woken
         every poll, forever. Failures are expected and keep the cached values.
         """
+        # The persistent listener supplies live movement and its own periodic
+        # idle wake, so the legacy poll stands down while it is connected.
+        if self._live_listener is not None and self._live_listener.active:
+            self._force_telemetry = False
+            return
+
         now = time.monotonic()
         forced, self._force_telemetry = self._force_telemetry, False
         interval = (
@@ -634,7 +707,10 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 continue
             if overview is not None:
                 got_any = True
-                self._overview[serial] = overview
+                # Funnel through the single sink (no per-frame notify: the update
+                # cycle notifies at the end); learns product codes and refreshes
+                # the cached data like the on-demand and live paths.
+                self.ingest_overview(serial, overview, live=False, notify=False)
                 # Diagnostic aid for "battery voltage: Unknown" reports: log the
                 # decoded family and raw battery value so a genuine 0 (no
                 # battery) can be told apart from a value that failed to decode.

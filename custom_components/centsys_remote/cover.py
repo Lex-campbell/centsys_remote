@@ -142,7 +142,7 @@ class CentsysGateCover(CentsysEntity, CoverEntity):
                 "Gate did not acknowledge the trigger (offline or busy?)."
             )
         await self.coordinator.async_request_refresh()
-        self.coordinator.start_live_follow(self._serial)
+        self.coordinator.note_activation(self._serial)
 
     async def async_open_cover(self, **kwargs) -> None:
         await self._trigger()

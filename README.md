@@ -1,6 +1,6 @@
 # Centsys Gate Remote for Home Assistant
 
-Control and monitor your Centurion gate operator directly from Home Assistant — open and close the gate, see live open/closed status, and track battery, mains power, safety beams and more. Works with **SMART Wi-Fi operators** (e.g. **D5 Evo SMART**) and, experimentally, older **GSM/ULTRA** operators reached through a cellular module (see [Supported devices](#supported-devices)).
+Control and monitor your Centurion gate operator directly from Home Assistant — open and close the gate, see live open/closed status, and track battery, mains power, safety beams and more. Works with **SMART Wi-Fi operators** (e.g. **D5-Evo SMART+**) and, experimentally, older **GSM/ULTRA** operators reached through a cellular module (see [Supported devices](#supported-devices)).
 
 > **Status: beta.** This is an unofficial, community-built integration and is not affiliated with or endorsed by Centurion Systems. It talks to the same cloud service the official Centsys app uses. Use at your own risk; feedback is very welcome (see [Giving feedback](#giving-feedback)).
 
@@ -11,7 +11,7 @@ Control and monitor your Centurion gate operator directly from Home Assistant �
 ## Features
 
 - **Gate cover** — open / close from the dashboard, automations, voice assistants, etc.
-- **Live status** — the gate animates `opening → open → closing → closed` in real time while it moves, then settles to the steady status.
+- **Live status** — the gate shows `opening → open → closing → closed` in real time as it moves. Turn on the optional [Live status mode](#live-status-catching-external-operation-opt-in) and it also catches the gate being operated *outside* Home Assistant — a physical remote, the app or a schedule — the moment it happens.
 - **Auxiliary outputs (GSM/ULTRA)** — extra operator IOs such as pedestrian, lock, garage or courtesy light appear as their own buttons (or switches for two-state outputs), mirroring the app's button list.
 - **Pedestrian open (SMART Wi-Fi)** — sliding/swing gates get a Pedestrian button for a partial opening, matching the app.
 - **Rich diagnostics** — battery voltage, mains/power supply status, safety-beam states, online/offline, fault and warranty flags, last-seen time, and Wi-Fi signal.
@@ -47,7 +47,7 @@ Gates you don't own but have been **shared** with your number (in the app's *Acc
 
 | Device | Connection | Status |
 | --- | --- | --- |
-| **Centurion D5 Evo SMART** | Wi-Fi | ✅ Fully tested — control + pedestrian open + live status + diagnostics |
+| **Centurion D5-Evo SMART+** | Wi-Fi | ✅ Fully tested — control + pedestrian open + live status + diagnostics |
 | **Centurion D6 SMART+** | Wi-Fi | ✅ Tested — control + live status + diagnostics |
 | **Centurion SD05 SMART+** (garage door) | Wi-Fi | ✅ Tested — control + live status |
 | **G-SPEAK 4G** module | GSM/cellular | ✅ Tested — gate + auxiliary IOs (pedestrian, lock) |
@@ -132,7 +132,7 @@ Each gate operator becomes one device. The main control is the **cover**; everyt
 | **Pedestrian** (button) | On SMART Wi-Fi sliding/swing gates, a partial (pedestrian) opening — the same action as the Pedestrian button in the official app. |
 | **Holiday lock** (switch) | On SMART Wi-Fi gates, switches the operator's Holiday Lock on and off. While it's on the operator ignores triggers, so the gate won't respond to remotes or Home Assistant. The state is read from the gate itself, so it stays correct even when the lock is changed from a remote, a schedule, SmartGuard Air or the MyCentsys Pro app. Not available on garage-door operators. |
 
-> **How quickly do readings update?** Gate position, power and beams come from the cloud and refresh every minute. Battery voltage, temperature and the Holiday lock state come from the operator itself, which has to wake its Wi-Fi radio to report — so they refresh about every 10 minutes to avoid draining battery-backed and solar installs. They also update within seconds whenever the gate is triggered, since the operator is already reporting then.
+> **How quickly do readings update?** Gate position, power and beams come from the cloud and refresh every minute. Battery voltage, temperature and the Holiday lock state come from the operator itself, which has to wake its Wi-Fi radio to report — so they refresh about every 10 minutes to avoid draining battery-backed and solar installs. They also update within seconds whenever the gate is triggered, since the operator is already reporting then. Want everything in real time (including changes made from a remote)? Turn on [Live status](#live-status-catching-external-operation-opt-in).
 >
 > To read the gate on demand, call the standard `homeassistant.update_entity` action on any of its entities:
 >
@@ -202,10 +202,36 @@ automation:
 
 ---
 
+## Live status: catching external operation (opt-in)
+
+By default, Home Assistant learns the gate moved in two ways: the once-a-minute cloud poll, and a real-time follow of the gate's own updates *whenever you open or close it from Home Assistant*. What it can't see by default is the gate being operated from **outside** HA — a **physical remote**, the app, or a schedule: those only show on the next cloud poll, and a quick open → auto-close cycle can finish between polls, so the cover looks like it barely moved.
+
+**Live status** closes that gap. When enabled, the integration keeps a lightweight live connection to your SMART Wi-Fi operator and reports movement in real time **no matter who triggers it**, including a physical remote. It also keeps battery and safety-beam readings fresh while the gate sits idle, so those no longer wait for the slow telemetry cycle.
+
+It connects with its **own identity**, separate from the MyCentsys app, so the two coexist: turning it on does **not** sign you out of the app, and using the app doesn't disturb Home Assistant.
+
+**Enable it:** **Settings → Devices & Services → Centsys Gate Remote → Configure → Enable live status.**
+
+It's **off by default** for now while we confirm it across operator models — see [Help test Live status](#help-test-live-status). GSM/ULTRA and shared gates are unaffected (they have no live telemetry channel and keep using polling).
+
+### Help test Live status
+
+The goal is to make Live status the **default** once it's proven across the range. It's confirmed on a **D5-Evo SMART+**. If you switch it on, please [open an issue](#giving-feedback) with your operator model and whether live status works — **battery/solar-powered** units and the **AU** region especially.
+
+| Operator | Live status |
+| --- | --- |
+| D5-Evo SMART+ | ✅ Confirmed |
+| Other SMART / SMART+ sliders (D3, D4, D6, D10, D20, ...) | ❓ Please test |
+| SD0-series garage doors | ❓ Please test |
+| VANTAGE / VertX / Vector (swing) | ❓ Please test |
+| GSM / ULTRA, shared gates | — Not applicable (no live channel) |
+
+---
+
 ## About the battery & live telemetry
 
-- **Live open/close status** is real time: when you press open/close, the integration follows the gate's live updates for the duration of the cycle, so the cover animates accurately.
-- **Battery voltage and similar deep diagnostics** come from a heavier check that briefly wakes the operator, so they refresh on a **slower schedule (about every 10 minutes)**, not every few seconds. After first setup the **battery voltage may show *unknown* until the first telemetry cycle completes** — this is normal. It will populate shortly.
+- **Live open/close status** is real time: when you press open/close, the integration follows the gate's live updates for the duration of the cycle, so the cover animates accurately. With the optional [Live status mode](#live-status-catching-external-operation-opt-in) enabled, this extends to operation from *outside* Home Assistant too (a physical remote, the app, a schedule).
+- **Battery voltage and similar deep diagnostics** come from a heavier check that briefly wakes the operator, so they refresh on a **slower schedule (about every 10 minutes)**, not every few seconds. After first setup the **battery voltage may show *unknown* until the first telemetry cycle completes** — this is normal. It will populate shortly. (With Live status enabled, the persistent connection keeps these fresh while the gate is idle.)
 - Battery is reported as **voltage** (e.g. `13.4 V`) rather than a percentage, because that's the trustworthy value the operator provides. A reading around 13–14 V typically means the operator is on mains with a healthy battery.
 
 ---

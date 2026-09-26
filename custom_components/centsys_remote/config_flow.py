@@ -6,7 +6,13 @@ from collections.abc import Mapping
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
+from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -15,6 +21,7 @@ from .api.exceptions import CentsysError, OtpInvalidError
 from .const import (
     CONF_COUNTRY,
     CONF_EMAIL,
+    CONF_ENABLE_LIVE_LISTENER,
     CONF_MOBILE_NUMBER,
     CONF_NAME,
     CONF_OTP_PLATFORM,
@@ -66,6 +73,11 @@ class CentsysConfigFlow(ConfigFlow, domain=DOMAIN):
     """
 
     VERSION = 1
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> "CentsysOptionsFlow":
+        return CentsysOptionsFlow(config_entry)
 
     def __init__(self) -> None:
         self._client: CentsysRemoteClient | None = None
@@ -211,3 +223,32 @@ class CentsysConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={"number": self._number or ""},
         )
+
+
+class CentsysOptionsFlow(OptionsFlow):
+    """Options: toggle the opt-in persistent live-status listener.
+
+    Kept minimal -- a single boolean. Changing it reloads the entry (see
+    ``__init__.async_setup_entry``), which starts or stops the listener.
+    """
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        # Stored under a private name rather than ``self.config_entry`` to avoid
+        # the deprecation warning on HA versions that set it on the base class.
+        self._entry = config_entry
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_ENABLE_LIVE_LISTENER,
+                    default=self._entry.options.get(CONF_ENABLE_LIVE_LISTENER, False),
+                ): bool,
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)

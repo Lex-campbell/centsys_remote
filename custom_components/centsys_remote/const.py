@@ -20,6 +20,12 @@ DEFAULT_OTP_PLATFORM = OTP_PLATFORM_WHATSAPP
 
 CONF_OTP_PLATFORM = "otp_platform"
 
+# Opt-in: keep a persistent MQTT connection open (on a distinct clientId) that
+# streams live gate movement in real time -- catching operation from a physical
+# remote/app/schedule that the periodic cloud poll can miss. Hardware-confirmed
+# collision-free with the phone app (see DECISIONS D15).
+CONF_ENABLE_LIVE_LISTENER = "enable_live_listener"
+
 # Cloud polling cadence (seconds) for device list + operator status.
 DEFAULT_SCAN_INTERVAL = 60
 
@@ -49,6 +55,12 @@ GSM_SCAN_INTERVAL = 300
 # Community / shared-access (AccessSharing) sites change rarely (a share added or
 # revoked), so refresh them on the same slower cadence rather than every poll.
 SHARED_SCAN_INTERVAL = 300
+
+# Live listener reconnect backoff (seconds): start short, grow on repeated
+# immediate failures, and cap. A connection that stayed up a while resets to the
+# minimum on its next drop (see live_listener.LiveListener).
+LISTENER_RECONNECT_MIN = 5
+LISTENER_RECONNECT_MAX = 300
 
 # After an on-demand airtime request, the operator queries its balance over the
 # cellular network and syncs back asynchronously, so poll the cached status a

@@ -833,13 +833,20 @@ class CentsysRemoteClient:
             )
         return {"pfx_base64": pfx, "password": password or ""}
 
-    async def _mqtt_session(self, *, au: bool) -> tuple[bytes, bytes, str, str]:
+    async def _mqtt_session(
+        self, *, au: bool, client_id_suffix: str = ""
+    ) -> tuple[bytes, bytes, str, str]:
         """Return ``(cert_pem, key_pem, client_id, host)`` for a broker session.
 
         The certificate is fetched once and reused: without this a single gate
         press costs two ``GetCertificate`` round trips (the trigger and the live
         status follow), plus a PKCS#12 parse each time. ``invalidate_certificate``
         clears it when the broker rejects the credential.
+
+        ``client_id_suffix`` is appended to the ``mcr:<number>`` clientId. The
+        persistent live listener passes a distinct suffix so its long-lived
+        connection never collides with the phone app or our own short-lived
+        open/telemetry connections.
         """
         import asyncio
 
@@ -855,7 +862,7 @@ class CentsysRemoteClient:
         return (
             self._cert_pem,
             self._key_pem,
-            f"{const.MQTT_CLIENT_ID_PREFIX}{self.mobile_number}",
+            f"{const.MQTT_CLIENT_ID_PREFIX}{self.mobile_number}{client_id_suffix}",
             const.MQTT_IP_AU if au else const.MQTT_IP_ZA,
         )
 
@@ -1038,5 +1045,60 @@ class CentsysRemoteClient:
                 on_overview=callback,
                 duration=duration,
                 wake_cmd01=wake_cmd01,
+            ),
+        )
+
+    async def run_live_listener(
+        self,
+        serials,
+        *,
+        macs=None,
+        on_overview,
+        on_connected=None,
+        stop_event,
+        wake_interval: float | None = None,
+        au: bool = False,
+    ) -> str:
+        """Hold one persistent connection streaming telemetry until stopped.
+
+        Opens the broker on a **distinct** clientId (``mcr:<number>:ha``) so the
+        long-lived connection never collides with the phone app or our own
+        short-lived open/telemetry connections, subscribes to every serial's
+        ``deviceOverview`` and invokes ``on_overview(serial, ov)`` per frame.
+        When ``macs`` are given it also wakes each operator periodically (every
+        ``wake_interval`` s) for idle battery/beam telemetry -- this does NOT open
+        the gate.
+
+        Returns ``"stopped"`` when ``stop_event`` is set or ``"dropped"`` if the
+        connection is lost, so a supervisor can reconnect. A rejected/expired
+        certificate raises ``CentsysCertExpiredError`` (and is invalidated), so
+        the supervisor re-fetches on the next attempt. Runs the blocking listen
+        loop in a thread.
+        """
+        from . import mqtt_remote
+
+        wakes: dict[str, bytes] = {}
+        for serial in serials:
+            mac = (macs or {}).get(serial)
+            if mac:
+                wakes[serial] = self._wake_packet(mac)
+
+        cert_pem, key_pem, client_id, host = await self._mqtt_session(
+            au=au, client_id_suffix=const.LISTENER_CLIENT_SUFFIX
+        )
+
+        return await self._run_mqtt(
+            lambda: mqtt_remote.listen_overview_blocking(
+                host=host,
+                port=const.MQTT_PORT,
+                client_id=client_id,
+                serials=serials,
+                cert_pem=cert_pem,
+                key_pem=key_pem,
+                on_overview=on_overview,
+                on_connected=on_connected,
+                stop_event=stop_event,
+                wakes=wakes,
+                wake_interval=wake_interval,
             ),
         )

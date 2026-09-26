@@ -16,7 +16,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # Start the opt-in live listener (no-op unless enabled in options), and
+    # reload the entry when options change so it starts/stops accordingly.
+    coordinator.start_live_sources()
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
     return True
+
+
+async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload the entry when its options change (e.g. the live-listener toggle)."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

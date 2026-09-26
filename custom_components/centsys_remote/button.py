@@ -107,7 +107,7 @@ class CentsysWifiPedestrianButton(CentsysEntity, ButtonEntity):
                 "Gate did not acknowledge the pedestrian trigger (offline or busy?)."
             )
         await self.coordinator.async_request_refresh()
-        self.coordinator.start_live_follow(self._serial)
+        self.coordinator.note_activation(self._serial)
 
 
 class CentsysGsmAirtimeButton(CentsysGsmEntity, ButtonEntity):
