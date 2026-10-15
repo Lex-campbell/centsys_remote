@@ -1,0 +1,3 @@
+# Offline tests only; no runtime dependency changes.
+pytest==9.0.3
+paho-mqtt==2.1.0

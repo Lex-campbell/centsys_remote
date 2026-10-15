@@ -320,8 +320,7 @@ class CentsysSensor(CentsysEntity, SensorEntity):
         # Prefer TTL-aware live status for operator_status (same source as cover).
         if self.entity_description.key == "operator_status":
             live = self.coordinator.live_gate_status(self._serial)
-            if live:
-                return live
+            return live
         # The product code is the operator-reported one the coordinator persists.
         if self.entity_description.key == "product_code":
             return self.coordinator.learned_product_code(self._serial)

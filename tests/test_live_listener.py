@@ -83,7 +83,7 @@ def _fake_session_factory(published: list, *, deliver=None, auto_stop: threading
         client = _Client()
         on_connect(client, None, None, None)
         if on_subscribe is not None:
-            on_subscribe(client, None, None, None)
+            on_subscribe(client, None, None, [0])
         if deliver is not None:
             topic, payload = deliver
             msg = types.SimpleNamespace(
@@ -140,33 +140,6 @@ def test_listen_dispatches_frame_and_stops():
     assert got_serial == serial
     assert ov.gate_status == "closed"
 
-
-def test_listen_sends_wakes_and_disconnect():
-    serial = "SER1"
-    published: list = []
-    stop = threading.Event()
-
-    fake = _fake_session_factory(published, auto_stop=stop)
-    orig, mqtt_remote.operator_session = mqtt_remote.operator_session, fake
-    try:
-        mqtt_remote.listen_overview_blocking(
-            host="h",
-            port=1,
-            client_id="mcr:1:ha",
-            serials=[serial],
-            cert_pem=b"c",
-            key_pem=b"k",
-            on_overview=lambda s, o: None,
-            stop_event=stop,
-            wakes={serial: b"\x01\x01\x01\x01"},
-            poll_interval=0.01,
-        )
-    finally:
-        mqtt_remote.operator_session = orig
-
-    assert f"{serial}/connectionRequest" in published
-    assert f"{serial}/userRemoteTrigger" in published
-    assert f"{serial}/disconnect" in published  # on_close release (wake path)
 
 
 def test_listen_passive_publishes_nothing():
@@ -257,6 +230,9 @@ class _FakeCoord:
     def async_update_listeners(self):
         self.updates += 1
 
+    def invalidate_wifi_positions(self):
+        self.invalidated = True
+
     def _thread_safe_ingest(self, serial, overview):
         self.ingested.append((serial, overview))
 
@@ -300,9 +276,220 @@ def test_supervisor_reconnects_with_backoff_and_survives_cert_expiry():
     assert len(calls) == 3  # cert-expiry did not abort the supervisor
     assert calls[0]["serials"] == ["S1"]
     assert calls[0]["macs"] == {"S1": "AA:BB:CC:DD"}
-    assert calls[0]["wake_interval"] == float(const.TELEMETRY_SCAN_INTERVAL)
+    assert calls[0]["wake_interval"] == float(const.POSITION_IDLE_REFRESH_INTERVAL)
     # Backoff grows on repeated fast drops: MIN, then MIN*2 (two gaps, three tries).
     assert sleeps == [const.LISTENER_RECONNECT_MIN, const.LISTENER_RECONNECT_MIN * 2]
     # A connection reported connected at least once, toggling the active flag.
     assert coord.updates >= 1
     assert listener.active is False  # cleared after the final drop/stop
+
+
+def test_retained_position_is_not_a_fresh_measurement():
+    msg = types.SimpleNamespace(
+        payload=_v2_frame(1), retain=True,
+        properties=types.SimpleNamespace(UserProperty=[]),
+    )
+    assert mqtt_remote.overview_from_message(msg) is None
+
+
+def test_disconnect_clears_verified_positions():
+    coord = _FakeCoord(_FakeClient([]), {})
+    listener = live_listener.LiveListener(coord)
+    listener._set_connected(True)
+    listener._set_connected(False)
+    assert coord.invalidated is True
+
+
+def test_listener_rejects_failed_subscription(monkeypatch):
+    @contextmanager
+    def rejected(*, on_subscribe, **kwargs):
+        on_subscribe(None, None, 1, [128])
+        yield object()
+    monkeypatch.setattr(mqtt_remote, 'operator_session', rejected)
+    connected = []
+    assert mqtt_remote.listen_overview_blocking(
+        host='h', port=1, client_id='test', serials=['S'],
+        cert_pem=b'c', key_pem=b'k', on_overview=lambda *a: None,
+        stop_event=threading.Event(), on_connected=lambda: connected.append(True),
+    ) == 'dropped'
+    assert not connected
+
+
+# A cold, stationary operator ignores cmd01 before its connection response.
+# These transports model that device behavior, not the implementation's order.
+import pytest
+
+
+def _bootstrap(monkeypatch, *, statuses=None, ack_at=2, respond_on_attempt=1,
+               stop_at=12, serials=("S",), wake_interval=60, retained=False,
+               retained_ack=False):
+    now = [0.0]
+    published = []
+    received = []
+    requests = {s: 0 for s in serials}
+    callbacks = {}
+    statuses = statuses or {s: 1 for s in serials}
+
+    def deliver(topic, payload=b"", *, retain=False):
+        callbacks["message"](callbacks["client"], None, types.SimpleNamespace(
+            topic=topic, payload=payload, retain=retain,
+            properties=types.SimpleNamespace(UserProperty=[]),
+        ))
+
+    class Stop:
+        def is_set(self):
+            return now[0] >= stop_at
+        def wait(self, interval):
+            now[0] += interval
+            if now[0] == ack_at:
+                for serial in serials:
+                    if statuses.get(serial) is not None:
+                        deliver(f"{serial}/connectionRequestResponse", retain=retained_ack)
+            return self.is_set()
+
+    @contextmanager
+    def session(*, on_connect, on_subscribe, on_message, on_close=None, **kwargs):
+        class Client:
+            def subscribe(self, *args, **kwargs):
+                pass
+            def publish(self, topic, payload=b"", **kwargs):
+                published.append((now[0], topic, payload))
+                serial = topic.split("/")[0]
+                if topic.endswith("/connectionRequest"):
+                    requests[serial] += 1
+                    if now[0] >= ack_at and statuses.get(serial) is not None:
+                        deliver(f"{serial}/connectionRequestResponse", retain=retained_ack)
+                elif topic.endswith("/userRemoteTrigger"):
+                    deliver(f"{serial}/userRemoteTriggerResponse", b"challenge")
+                    if now[0] >= ack_at and requests[serial] >= respond_on_attempt:
+                        deliver(f"{serial}/deviceOverview", _v2_frame(statuses[serial]), retain=retained)
+        client = Client()
+        callbacks.update(client=client, message=on_message)
+        on_connect(client, None, None, 0)
+        on_subscribe(client, None, 1, [0])
+        try:
+            yield client
+        finally:
+            if on_close:
+                on_close(client)
+
+    monkeypatch.setattr(mqtt_remote, "operator_session", session)
+    monkeypatch.setattr(mqtt_remote.time, "monotonic", lambda: now[0])
+    result = mqtt_remote.listen_overview_blocking(
+        host="offline", port=1, client_id="test", serials=serials,
+        cert_pem=b"c", key_pem=b"k", on_overview=lambda s, ov: received.append((s, ov)),
+        stop_event=Stop(), wakes={s: b"identity-only" for s in serials},
+        connect_timeout=3, poll_interval=1, wake_interval=wake_interval,
+    )
+    return result, published, received, requests
+
+
+@pytest.mark.parametrize("status,label", [(1, "closed"), (0, "open")])
+def test_cold_stationary_status_without_remote_movement(monkeypatch, status, label):
+    result, published, received, requests = _bootstrap(monkeypatch, statuses={"S": status})
+    assert result == "stopped"
+    assert [(s, ov.gate_status) for s, ov in received] == [("S", label)]
+    identity = [(t, payload) for t, topic, payload in published if topic.endswith("/userRemoteTrigger")]
+    assert identity == [(2, b"identity-only")]
+    assert requests == {"S": 1}
+    assert published[-1][1] == "S/disconnect"
+
+
+def test_lost_first_status_is_retried_without_movement(monkeypatch):
+    _, published, received, requests = _bootstrap(monkeypatch, respond_on_attempt=2)
+    assert requests == {"S": 2}
+    assert received[0][1].gate_status == "closed"
+    assert all(payload == b"identity-only" for _, topic, payload in published if topic.endswith("/userRemoteTrigger"))
+
+
+def test_silent_operator_has_bounded_retries_and_no_trigger(monkeypatch):
+    _, published, received, requests = _bootstrap(monkeypatch, statuses={"S": None})
+    assert requests == {"S": 3}
+    assert not received
+    assert not any(topic.endswith("/userRemoteTrigger") for _, topic, _ in published)
+
+
+def test_silent_operator_does_not_block_other_operator(monkeypatch):
+    _, published, received, requests = _bootstrap(
+        monkeypatch, serials=("S", "OTHER"), statuses={"S": None, "OTHER": 0},
+    )
+    assert [(s, ov.gate_status) for s, ov in received] == [("OTHER", "open")]
+    assert requests == {"S": 3, "OTHER": 1}
+
+
+def test_stop_before_ack_sends_no_identity(monkeypatch):
+    _, published, received, _ = _bootstrap(monkeypatch, stop_at=1)
+    assert not received
+    assert not any(topic.endswith("/userRemoteTrigger") for _, topic, _ in published)
+
+
+def test_retained_status_does_not_complete_bootstrap(monkeypatch):
+    _, _, received, requests = _bootstrap(monkeypatch, retained=True, stop_at=16)
+    assert not received
+    assert requests == {"S": 3}
+
+
+def test_idle_cycle_refreshes_without_remote_movement(monkeypatch):
+    _, _, received, requests = _bootstrap(monkeypatch, wake_interval=20, stop_at=25)
+    assert requests == {"S": 2}
+    assert len(received) == 2
+
+
+def test_retained_handshake_ack_cannot_start_identity_request(monkeypatch):
+    _, published, received, requests = _bootstrap(monkeypatch, retained_ack=True)
+    assert requests == {"S": 3}
+    assert not received
+    assert not any(topic.endswith("/userRemoteTrigger") for _, topic, _ in published)
+
+
+def test_unknown_measurement_keeps_bootstrap_retrying(monkeypatch):
+    _, _, received, requests = _bootstrap(monkeypatch, statuses={"S": 255}, stop_at=16)
+    assert requests == {"S": 3}
+    assert all(ov.gate_status is None for _, ov in received)
+
+
+def test_bootstrap_never_echoes_activation_challenge(monkeypatch):
+    _, published, _, _ = _bootstrap(monkeypatch)
+    assert [(topic, payload) for _, topic, payload in published] == [
+        ("S/connectionRequest", b""),
+        ("S/userRemoteTrigger", b"identity-only"),
+        ("S/disconnect", b""),
+    ]
+
+
+# Diagnostic evidence must distinguish missing handshake, rejected cached data,
+# and decoded frames with no position, without exposing identifiers or contents.
+def test_startup_diagnostics_missing_handshake(monkeypatch, caplog):
+    caplog.set_level("DEBUG", logger=mqtt_remote.__name__)
+    _bootstrap(monkeypatch, statuses={"S": None})
+    assert "stage=handshake counts={}" in caplog.text
+    assert "sending identity only" not in caplog.text
+
+
+def test_startup_diagnostics_retained_frame(monkeypatch, caplog):
+    caplog.set_level("DEBUG", logger=mqtt_remote.__name__)
+    _bootstrap(monkeypatch, retained=True, stop_at=16)
+    assert "kind=identity_reply" in caplog.text
+    assert "retained=True decoded=False position_known=False" in caplog.text
+    assert "stage=position" in caplog.text
+    assert "S/" not in caplog.text
+    assert "challenge" not in caplog.text
+
+
+def test_startup_diagnostics_unknown_position(monkeypatch, caplog):
+    caplog.set_level("DEBUG", logger=mqtt_remote.__name__)
+    _bootstrap(monkeypatch, statuses={"S": 255}, stop_at=16)
+    assert "decoded=True position_known=False" in caplog.text
+    assert "stage=position" in caplog.text
+
+
+def test_startup_diagnostics_are_bounded_and_metadata_only(caplog):
+    caplog.set_level("DEBUG", logger=mqtt_remote.__name__)
+    diagnostics = mqtt_remote._StartupDiagnostics("listener-slot-1")
+    msg = types.SimpleNamespace(topic="PRIVATE_DEVICE/overview", payload=b"PRIVATE_TOKEN",
+                                retain=False, properties={"secret": "PRIVATE_SECRET"})
+    for _ in range(100):
+        diagnostics.record("overview", msg, decoded=False)
+    assert diagnostics.counts == {"overview": 100}
+    assert len(caplog.records) == 3
+    assert "PRIVATE" not in caplog.text

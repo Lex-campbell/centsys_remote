@@ -33,6 +33,7 @@ from .const import (
     GSM_SCAN_INTERVAL,
     LIVE_FOLLOW_SECONDS,
     LIVE_STATUS_TTL,
+    STATIONARY_POSITION_TTL,
     NO_GATES_HELP_URL,
     SHARED_HELP_URL,
     SHARED_SCAN_INTERVAL,
@@ -96,6 +97,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         # takes precedence over the cloud poll while fresh so the cover *and*
         # the operator-status sensor reflect movement in real time.
         self._live_status: dict[str, tuple[str, float]] = {}
+        self._position_expiry: dict[str, asyncio.TimerHandle] = {}
         # Serials currently streaming deviceOverview after a TRG/PED press.
         self._live_following: set[str] = set()
         # -inf, not 0: monotonic() is time since boot, so a zero start would
@@ -161,22 +163,40 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             # Set the listener's stop event first so its executor thread returns
             # promptly, then cancel the tracked tasks.
             await self._live_listener.async_stop()
+        for handle in self._position_expiry.values():
+            handle.cancel()
+        self._position_expiry.clear()
         for task in list(self._tasks):
             task.cancel()
         self._tasks.clear()
         await super().async_shutdown()
 
     def set_live_gate_status(self, key: str, label: str | None) -> None:
-        """Push (or clear) a live gate-status label and refresh entities.
-
-        Pass ``None`` to drop the live label so entities fall back to the poll.
-        Entities must read via :meth:`live_gate_status` (TTL-aware).
-        """
-        if label is None:
+        """Publish bounded position; expiry also notifies HA while idle."""
+        handle = self._position_expiry.pop(key, None)
+        if handle is not None:
+            handle.cancel()
+        if label not in {
+            "open", "closed", "partly_open", "partly_closed", "opening", "closing"
+        }:
             self._live_status.pop(key, None)
         else:
-            self._live_status[key] = (label, time.monotonic() + LIVE_STATUS_TTL)
+            # First refresh ingests Wi-Fi telemetry before self.data exists.
+            kind = ((self.data or {}).get(key) or {}).get("kind")
+            wifi = kind == "wifi" or (kind is None and key in self._overview)
+            stationary = label in {"open", "closed", "partly_open", "partly_closed"}
+            ttl = STATIONARY_POSITION_TTL if wifi and stationary else LIVE_STATUS_TTL
+            self._live_status[key] = (label, time.monotonic() + ttl)
+            self._position_expiry[key] = self.hass.loop.call_later(
+                ttl, self.set_live_gate_status, key, None
+            )
         self.async_update_listeners()
+
+    def invalidate_wifi_positions(self) -> None:
+        """A lost listener session must not leave old Wi-Fi positions trusted."""
+        for serial, data in (self.data or {}).items():
+            if data.get("kind") == "wifi":
+                self.set_live_gate_status(serial, None)
 
     def live_gate_status(self, key: str) -> str | None:
         """Live gate-status label for ``key`` if still within its TTL, else None."""
@@ -188,11 +208,14 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         """Single sink for every telemetry producer (poll, follow, on-demand, listener).
 
         Caches the overview, learns the operator's reported product code, and
-        refreshes the per-serial ``data`` entry. When ``live`` it also pushes the
-        gate status as the TTL-bounded live position, so a moving gate shows
-        immediately. Producers must never touch ``_overview`` or the live-status
-        map directly -- this is the seam the live listener feeds and the one the
+        refreshes the per-serial ``data`` entry. Every producer also pushes the
+        measured gate status as the TTL-bounded position. Producers must never
+        touch ``_overview`` or the live-status map directly -- this is the seam the live listener feeds and the one the
         legacy poll/follow can be removed behind.
+
+        Position from any successfully decoded producer is authoritative for the
+        same bounded TTL. ``live`` is retained for caller compatibility, not as
+        a condition for accepting measured position. No HTTP position fallback.
 
         ``notify`` is False only for the periodic poll, which runs inside the
         coordinator update cycle that notifies listeners itself; live frames and
@@ -209,11 +232,8 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         )
         if self.data and serial in self.data:
             self.data[serial]["overview"] = overview
-        if live and getattr(overview, "gate_status", None) is not None:
-            # set_live_gate_status notifies listeners itself.
-            self.set_live_gate_status(serial, overview.gate_status)
-        elif notify:
-            self.async_update_listeners()
+        # Unknown/lost telemetry invalidates the previous endpoint immediately.
+        self.set_live_gate_status(serial, getattr(overview, "gate_status", None))
 
     def _thread_safe_ingest(self, serial: str, overview: Any) -> None:
         """Ingest a frame arriving on an MQTT worker thread, on the event loop.
@@ -235,7 +255,7 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         overview it just fetched, so the garage/gate family is known for later
         presses and the pedestrian-button exposure without waiting for the slow
         telemetry poll. Thin wrapper over :meth:`ingest_overview` -- an on-demand
-        read, not a live movement frame, so it does not push a live position.
+        read; its measured position uses the same freshness policy as live frames.
         """
         self.ingest_overview(serial, overview, live=False)
 
@@ -331,14 +351,16 @@ class CentsysCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
                 pass
             finally:
                 self._live_following.discard(serial)
-                # Drop live so the cloud poll is authoritative after the follow.
-                self.set_live_gate_status(serial, None)
+                # Let the last verified frame expire; never promote HTTP position.
                 await self.async_request_refresh()
 
         self.async_spawn(_runner(), name=f"centsys_follow_{serial}")
 
     def _live_status_label(self, key: str) -> str | None:
         """The live gate-status label for ``key`` if still within its TTL."""
+        data = (self.data or {}).get(key) or {}
+        if data.get("kind") == "wifi" and getattr(data.get("device"), "is_online", None) is False:
+            return None
         entry = self._live_status.get(key)
         if entry is None:
             return None

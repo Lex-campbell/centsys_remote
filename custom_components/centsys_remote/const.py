@@ -34,8 +34,14 @@ CONF_ENABLE_LIVE_LISTENER = "enable_live_listener"
 DEFAULT_SCAN_INTERVAL = 60
 
 # How long a live gate-status frame (pushed by a cover's follow after a press)
-# stays authoritative before entities fall back to the slower cloud poll.
+# stays authoritative; expired positions become unknown, never HTTP fallback.
 LIVE_STATUS_TTL = 20
+
+# Release-candidate policy: one read-only idle wake per minute, with 30s
+# delivery tolerance. Moving states retain the shorter 20s lifetime above.
+# Hardware acceptance must check idle cadence and radio/power impact.
+POSITION_IDLE_REFRESH_INTERVAL = 60
+STATIONARY_POSITION_TTL = 90
 
 # How long to follow the MQTT status stream after a TRG/PED press (covers the
 # open + auto-close cycle).

@@ -23,7 +23,7 @@ from .api.exceptions import CentsysCertExpiredError
 from .const import (
     LISTENER_RECONNECT_MAX,
     LISTENER_RECONNECT_MIN,
-    TELEMETRY_SCAN_INTERVAL,
+    POSITION_IDLE_REFRESH_INTERVAL,
 )
 
 if TYPE_CHECKING:
@@ -100,6 +100,8 @@ class LiveListener:
         if self._connected == value:
             return
         self._connected = value
+        if not value:
+            self._coord.invalidate_wifi_positions()
         # Refresh entities so the cover leaves / falls back to the poll cleanly.
         self._coord.async_update_listeners()
 
@@ -124,7 +126,7 @@ class LiveListener:
                     on_overview=self._on_overview,
                     on_connected=self._on_connected,
                     stop_event=stop_event,
-                    wake_interval=float(TELEMETRY_SCAN_INTERVAL),
+                    wake_interval=float(POSITION_IDLE_REFRESH_INTERVAL),
                 )
             except CentsysCertExpiredError:
                 # The client has already invalidated the cached cert; the next
