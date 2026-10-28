@@ -22,6 +22,14 @@ MQTT_CLIENT_ID_PREFIX = "mcr:"
 # hardware to receive broadcasts and accept the connectionRequest/wake (D15).
 LISTENER_CLIENT_SUFFIX = ":ha"
 
+# Suffix for one-off telemetry reads/wakes (get_overview / follow_overview).
+# Distinct from the app's bare "mcr:<number>" (so a read isn't refused as a
+# duplicate of the app's own session and left without deviceOverview) and from
+# the listener's ":ha" (so our own connections never collide with each other).
+# Only telemetry reads use this; the activation handshake keeps the plain
+# identity, which must match the user's number to be authorised.
+READ_CLIENT_SUFFIX = ":ha-r"
+
 # Trigger packets are built per operator from its macAddress (see api/packets.py).
 
 # Service-level bearer used for the initial SendOtp/ValidateOtp calls, before a

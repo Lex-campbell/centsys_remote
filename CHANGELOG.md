@@ -2,6 +2,21 @@
 
 Notable changes to the Centsys Gate Remote integration.
 
+## 0.6.4b1 (2026-10-28) — Fix live status going stale while the app is open (beta)
+
+### Fixed
+
+Live gate status — and the **Keep open** / **Holiday lock** switches — could stop
+updating (or lag and flip between on/off) when the **MyCentsys app was open at the
+same time**. The integration's status reads were identifying to the gate with the
+same connection id as the app, so the gate treated them as a duplicate and stopped
+sending status updates until the app disconnected.
+
+Status reads now use their own connection id, so they keep working alongside the
+app. Opening/closing and the switch commands are unchanged. If you saw the switches
+not matching the motor, or state bouncing around, update and it should track
+correctly again.
+
 ## 0.6.3b1 (2026-10-08) — Find gates linked by admin as well as remote user (beta)
 
 ### New: admin-linked gates are now discovered

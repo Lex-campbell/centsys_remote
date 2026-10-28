@@ -893,10 +893,18 @@ class CentsysRemoteClient:
         status follow), plus a PKCS#12 parse each time. ``invalidate_certificate``
         clears it when the broker rejects the credential.
 
-        ``client_id_suffix`` is appended to the ``mcr:<number>`` clientId. The
-        persistent live listener passes a distinct suffix so its long-lived
-        connection never collides with the phone app or our own short-lived
-        open/telemetry connections.
+        ``client_id_suffix`` is appended to the ``mcr:<number>`` clientId, giving
+        three distinct identities so none is refused by the broker as a duplicate
+        of another:
+          * ``""`` (plain ``mcr:<number>``) -- the activation handshake, which
+            must present the user's own number to be authorised. It matches the
+            phone app's id, but is short-lived and the operator tolerates it.
+          * ``LISTENER_CLIENT_SUFFIX`` (``:ha``) -- the persistent live listener.
+          * ``READ_CLIENT_SUFFIX`` (``:ha-r``) -- one-off telemetry reads/wakes
+            (``get_overview``/``follow_overview``). A read must NOT share the
+            app's plain id: a duplicate session is refused and never receives
+            ``deviceOverview``, so live/Keep/Lock state would go stale whenever
+            the app is connected.
         """
         import asyncio
 
@@ -1043,7 +1051,9 @@ class CentsysRemoteClient:
         from . import mqtt_remote
 
         wake_cmd01 = self._wake_packet(mac)
-        cert_pem, key_pem, client_id, host = await self._mqtt_session()
+        cert_pem, key_pem, client_id, host = await self._mqtt_session(
+            client_id_suffix=const.READ_CLIENT_SUFFIX
+        )
 
         return await self._run_mqtt(
             lambda: mqtt_remote.fetch_overview_blocking(
@@ -1078,7 +1088,9 @@ class CentsysRemoteClient:
         from . import mqtt_remote
 
         wake_cmd01 = self._wake_packet(mac)
-        cert_pem, key_pem, client_id, host = await self._mqtt_session()
+        cert_pem, key_pem, client_id, host = await self._mqtt_session(
+            client_id_suffix=const.READ_CLIENT_SUFFIX
+        )
 
         await self._run_mqtt(
             lambda: mqtt_remote.follow_overview_blocking(
