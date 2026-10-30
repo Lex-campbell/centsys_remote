@@ -62,6 +62,18 @@ Not sure which you have? With mobile data/Wi-Fi on but **Bluetooth off**, and aw
 
 ---
 
+## SMART verified position and startup
+
+SMART cover position and operator status use fresh, non-retained MQTT feedback rather than HTTP position fallback. Enable live status for persistent feedback; initial/reconnect requests wait for connection acknowledgement before requesting status, with bounded retries and no movement. Startup may take time while cloud/device responses arrive.
+
+Stationary position expires after 90 seconds, moving position after 20 seconds; the listener requests idle status every 60 seconds. Missing/unknown/expired position or listener loss clears trust instead of assuming closed. A separate verified-feedback connectivity sensor distinguishes position reception from HTTP cloud online status.
+
+SMART open/close requires a verified stationary endpoint: already at target is a no-op; unknown, moving or intermediate positions are refused. The endpoint is rechecked after asynchronous work and consumed before sending. The underlying trigger is still directionless, so external operation can race the final check; no absolute direction guarantee or automatic motor retry is introduced. GSM behavior is not intentionally changed.
+
+Offline regressions can be run with Python 3.12: `python -m pip install -r requirements-dev.txt` then `python -m pytest -q tests`. No credentials, Home Assistant runtime or hardware connection is needed. These tests are not broad hardware certification.
+
+---
+
 ## Requirements
 
 - **Home Assistant 2024.4 or newer.**

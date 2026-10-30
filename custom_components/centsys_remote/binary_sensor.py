@@ -57,6 +57,12 @@ def _problem_conditions(data: dict[str, Any]) -> dict[str, Any] | None:
 
 BINARY_SENSORS: tuple[CentsysBinaryDescription, ...] = (
     CentsysBinaryDescription(
+        key="telemetry_connected",
+        name="Verified telemetry",
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        value_fn=lambda data: None,  # resolved from coordinator freshness below
+    ),
+    CentsysBinaryDescription(
         key="online",
         translation_key="online",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
@@ -199,6 +205,12 @@ class CentsysBinarySensor(CentsysEntity, BinarySensorEntity):
         data = self._device_data
         if not data:
             return None
+        if self.entity_description.key == "telemetry_connected":
+            return bool(
+                self.coordinator.last_update_success
+                and getattr(data.get("device"), "is_online", None) is not False
+                and self.coordinator.live_gate_status(self._serial) is not None
+            )
         return self.entity_description.value_fn(data)
 
     @property
