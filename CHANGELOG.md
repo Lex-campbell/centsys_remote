@@ -2,6 +2,77 @@
 
 Notable changes to the Centsys Gate Remote integration.
 
+## 0.6.4 (2026-10-30) — Stable release
+
+First stable release since 0.6.0. It includes everything that shipped in the
+0.6.1b1–0.6.4b1 betas. Update and restart Home Assistant. Existing installs
+that were already working need no re-setup; accounts without a stored region
+keep using the South African datacentre.
+
+### New: automatic regional datacentre selection
+
+Centurion runs separate regional datacentres, and each account lives on exactly
+one of them. Until now the integration only talked to the South African
+datacentre, so **Australia / New Zealand** accounts couldn't see their gates.
+
+The datacentre is now chosen **automatically from the country you pick at setup**
+— AU/NZ use the Australia datacentre, everyone else uses South Africa — so there
+is normally nothing to configure. Every backend call (the Azure gateway, the
+GWeb/access-sharing hosts, and the MQTT broker) follows the account's region.
+
+- The setup form has an optional **Datacentre** dropdown, best left on
+  **Auto (from country)**. The explicit *South Africa* / *Australia & New Zealand*
+  choices cover the rare case where a number's country and its gate's datacentre
+  don't line up.
+- You can switch datacentre after setup without removing the integration:
+  **Settings → Devices & Services → Centsys Gate Remote → ⋮ → Reconfigure**. A
+  fresh one-time PIN is sent on the chosen datacentre to reconnect.
+
+### New: admin-linked gates are now discovered
+
+Some accounts are set up as an **operator admin** rather than (or as well as) a
+**remote user**. Those are two separate lists on Centurion's side, and until now
+the integration only read the remote-user one — so a gate that showed up in the
+app could be missing from Home Assistant with a "no gates linked" notice.
+
+The integration now also checks the admin list and **combines both**, removing
+duplicates, so a gate linked either way appears. There is nothing to configure,
+and accounts that were already working are unaffected (a gate linked both ways is
+shown once). The extra lookup is best-effort: if it is unavailable it is simply
+skipped and never interrupts the normal update.
+
+### Fixed: garage doors no longer show gate-only controls
+
+Some garage operators report telemetry that looks like a gate, so the integration
+could show gate-only controls (Holiday Lock, Keep Open, Pedestrian) on a garage.
+Holiday Lock shares its command with the door open, so toggling it would move the
+door. Gate vs garage is now decided from the product code the operator reports
+about itself, and those controls appear only once an operator is positively a
+gate. (#10)
+
+Telemetry is decoded by the operator's reported family rather than guessed from
+the message size, and the newer garage telemetry format is read correctly
+(status and battery), so garage diagnostics are no longer blank on recent
+firmware. On a gate, the controls appear immediately; on a brand-new setup they
+appear once the operator has reported in.
+
+### Fixed: live status stays current while the app is open
+
+Live gate status — and the **Keep open** / **Holiday lock** switches — could stop
+updating (or lag and flip between on/off) when the **MyCentsys app was open at the
+same time**. The integration's status reads were identifying to the gate with the
+same connection id as the app, so the gate treated them as a duplicate and stopped
+sending status updates until the app disconnected.
+
+Status reads now use their own connection id, so they keep working alongside the
+app. Opening/closing and the switch commands are unchanged.
+
+### Documentation
+
+- The known-devices table now lists the **Centurion Vantage** (swing, Wi-Fi) as
+  reported working, and calls out the **D10 SMART** as Bluetooth-only and
+  therefore not controllable remotely. The Wi-Fi model is the **D10 SMART+**.
+
 ## 0.6.4b1 (2026-10-28) — Fix live status going stale while the app is open (beta)
 
 ### Fixed
